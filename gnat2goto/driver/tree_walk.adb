@@ -22,6 +22,11 @@ with Urealp; use Urealp;
 
 package body Tree_Walk is
 
+   function Make_New_Array_Function_Call
+     (Array_Size : Irep;
+      Element_Type : Irep;
+      Source_Location :  Source_Ptr) return Irep;
+
    procedure Add_Entity_Substitution (E : Entity_Id; Subst : Irep);
 
    procedure Append_Declare_And_Init
@@ -2282,6 +2287,7 @@ package body Tree_Walk is
             Source_Location => Sloc (E));
          Ret : constant Irep := New_Irep (I_Struct_Expr);
       begin
+         Put_Line ("*******************ss  Make_Array_Default_Initialiser");
          Append_Struct_Member (Ret, Lbound);
          Append_Struct_Member (Ret, Hbound);
          Append_Struct_Member (Ret, Alloc);
@@ -3814,6 +3820,16 @@ package body Tree_Walk is
       Map_Key : constant Array_Dup_Key := (Element_Type, Index_Type);
       Map_Cursor : Array_Dup_Maps.Cursor;
       Map_Inserted : Boolean;
+      --  ----------------------------------------
+      Idx : constant Node_Id := First_Index (Element_Type);
+      Lbound : constant Irep := Do_Expression (Low_Bound (Idx));
+      Hbound : constant Irep := Do_Expression (High_Bound (Idx));
+      Idx_Type : constant Entity_Id := Get_Array_Index_Type (Element_Type);
+      Len : constant Irep :=
+        Make_Array_Length_Expr (Lbound, Hbound, Idx_Type);
+      Component_Type : constant Irep :=
+        Do_Type_Reference (Get_Array_Component_Type (Element_Type));
+      --  ----------------------------------------
    begin
       Array_Dup_Map.Insert (Map_Key, Ireps.Empty, Map_Cursor, Map_Inserted);
       if not Map_Inserted then
@@ -3838,7 +3854,11 @@ package body Tree_Walk is
          Array_Copy : constant Irep :=
            Fresh_Var_Symbol_Expr (Ptr_Type, "new_array");
          Array_Alloc : constant Irep :=
-           New_Irep (I_Side_Effect_Expr_Cpp_New_Array);
+           --  New_Irep (I_Side_Effect_Expr_Cpp_New_Array);
+           Make_New_Array_Function_Call
+             (Array_Size => Len,
+              Element_Type => Make_Pointer_Type (Component_Type),
+           Source_Location => Sloc (Element_Type));
          Body_Block : constant Irep := New_Irep (I_Code_Block);
          Call_Inst : constant Irep := New_Irep (I_Code_Function_Call);
          Call_Args : constant Irep := New_Irep (I_Argument_List);
@@ -4111,6 +4131,67 @@ package body Tree_Walk is
       Set_Value (Ret, Val_Binary);
       return Ret;
    end Make_Integer_Constant;
+
+   function Make_New_Array_Function_Call
+     (Array_Size : Irep;
+      Element_Type : Irep;
+      Source_Location :  Source_Ptr) return Irep
+   is
+      --  returns an irep representation of a function call
+      Func_Symbol : Symbol;
+      Call_Inst : constant Irep := New_Irep (I_Code_Function_Call);
+      Call_Args : constant Irep := New_Irep (I_Argument_List);
+   begin
+      --  create function that creates (dynamic) array and returns pointer
+      --  (after checks pass)
+      declare
+         Func_Type : constant Irep := New_Irep (I_Code_Type);
+         Func_Name : constant String := Fresh_Var_Name ("new_array_function");
+         Func_Params : constant Irep := New_Irep (I_Parameter_List);
+         Param_Size : constant Irep := New_Irep (I_Code_Parameter);
+         Body_Block : constant Irep := New_Irep (I_Code_Block);
+         Return_Inst : constant Irep := New_Irep (I_Code_Return);
+         Ptr_Type : constant Irep :=
+           Make_Pointer_Type (Element_Type);
+         --  ----------------------------------------
+         Array_Pointer : constant Irep :=
+           Fresh_Var_Symbol_Expr (Ptr_Type, "new_array");
+         Array_Alloc : constant Irep :=
+           --  New_Irep (I_Side_Effect_Expr_C_New_Array);
+           Make_Side_Effect_Expr_Cpp_New_Array (
+            Source_Location => Source_Location,
+                                                Size => Array_Size,
+                                                I_Type => Element_Type);
+      begin
+         --  DEFINE THE FUNCTION TYPE
+         Set_Type (Param_Size, Make_Int_Type (Integer (Array_Size)));
+         Set_Identifier (Param_Size, Func_Name & "::array_size");
+         Set_Base_Name (Param_Size, "array_size");
+         Append_Parameter (Func_Params, Param_Size);
+         Set_Parameters (Func_Type, Func_Params);
+         Set_Return_Type (Func_Type, Ptr_Type);
+         --  ----------------------------------------
+         --  CREATE FUNCTION BODY
+         Append_Declare_And_Init (Array_Pointer, Array_Alloc, Body_Block, 0);
+         Set_Return_Value (Return_Inst, Array_Pointer);
+         Append_Op (Body_Block, Return_Inst);
+         --  ----------------------------------------
+         --  MAKE FUNCTION SYMBOL & PLACE IN SYM TABLE:
+         Func_Symbol.SymType := Func_Type;
+         Func_Symbol.Name := Intern (Func_Name);
+         Func_Symbol.PrettyName := Func_Symbol.Name;
+         Func_Symbol.BaseName := Func_Symbol.Name;
+         Func_Symbol.Mode := Intern ("C");
+         Func_Symbol.Value := Body_Block;
+         Global_Symbol_Table.Insert (Intern (Func_Name), Func_Symbol);
+      end;
+      --  ------------------------------------------------------------
+      --  RETURN FUNCTION CALL
+      Append_Argument (Call_Args, Array_Size);
+      Set_Arguments (Call_Inst, Call_Args);
+      Set_Function (Call_Inst, Symbol_Expr (Func_Symbol));
+      return Call_Inst;
+   end Make_New_Array_Function_Call;
 
    ------------------------
    -- Make_Pointer_Index --
