@@ -768,6 +768,8 @@ package body Tree_Walk is
         Make_Pointer_Type (Do_Type_Reference (LHS_Element_Type));
       RHS_Data_Type : constant Irep :=
         Make_Pointer_Type (Do_Type_Reference (RHS_Element_Type));
+      LHS_fun_call : constant Irep :=
+        Fresh_Var_Symbol_Expr (LHS_Data_Type, "copy_fun_lhs");
    begin
       if not Can_Get_Array_Index_Type (Name (N)) then
          Report_Unhandled_Node_Empty (N, "Do_Array_Assignment",
@@ -836,6 +838,7 @@ package body Tree_Walk is
 
       Append_Op (Ret, Make_Code_Function_Call (I_Function => Copy_Func,
                                                Arguments => Copy_Args,
+                                               Lhs => LHS_fun_call,
                                                Source_Location => Sloc (N)));
 
       return Ret;
@@ -3772,7 +3775,11 @@ package body Tree_Walk is
          Set_Iter (Body_Loop, Make_Increment (Counter_Sym, Index_Type, 1));
          Set_Lhs (Loop_Test, Counter_Sym);
          Set_Rhs (Loop_Test, Param_Symbol (Len_Arg));
+         Set_Type (I     => Loop_Test,
+                   Value => Make_Bool_Type);
          Set_Cond (Body_Loop, Loop_Test);
+         Set_Init (I     => Body_Loop,
+                   Value => Make_Nil (Sloc (RHS_Element_Type)));
 
          Set_Lhs (Loop_Assign,
                   Make_Pointer_Index (Param_Symbol (Write_Ptr_Arg),
@@ -3836,10 +3843,12 @@ package body Tree_Walk is
          Len_Arg : constant Irep := New_Irep (I_Code_Parameter);
          Len_Type : constant Irep := Do_Type_Reference (Index_Type);
          Func_Symbol : Symbol;
+         Alloc_Symbol : Symbol;
          Map_Size_Str : constant String :=
            Integer'Image (Integer (Array_Dup_Map.Length));
          Func_Name : constant String :=
            "__ada_dup_array" & Map_Size_Str (2 .. Map_Size_Str'Last);
+         Alloc_Name : constant String := "__new_array";
          Array_Copy : constant Irep :=
            Fresh_Var_Symbol_Expr (Ptr_Type, "new_array");
          Array_Alloc : constant Irep :=
@@ -3848,6 +3857,9 @@ package body Tree_Walk is
          Call_Inst : constant Irep := New_Irep (I_Code_Function_Call);
          Call_Args : constant Irep := New_Irep (I_Argument_List);
          Return_Inst : constant Irep := New_Irep (I_Code_Return);
+         Lhs_fun_call : constant Irep :=
+           Fresh_Var_Symbol_Expr (Do_Type_Reference (Element_Type),
+                                  "array_dup_fun_lhs");
 
       begin
 
@@ -3871,6 +3883,8 @@ package body Tree_Walk is
          Append_Argument (Call_Args, Param_Symbol (Ptr_Arg));
          Append_Argument (Call_Args, Param_Symbol (Len_Arg));
          Set_Arguments (Call_Inst, Call_Args);
+         Set_Lhs (I     => Call_Inst,
+                  Value => Lhs_fun_call);
          Set_Function (Call_Inst,
                        Get_Array_Copy_Function (Element_Type,
                                                 Element_Type,
@@ -3888,6 +3902,13 @@ package body Tree_Walk is
          Func_Symbol.Mode := Intern ("C");
          Func_Symbol.Value := Body_Block;
          Global_Symbol_Table.Insert (Intern (Func_Name), Func_Symbol);
+         --  Add allocation function to symbol table
+         Alloc_Symbol.SymType := Func_Type;
+         Alloc_Symbol.Name := Intern (Alloc_Name);
+         Alloc_Symbol.PrettyName := Alloc_Symbol.Name;
+         Alloc_Symbol.BaseName := Alloc_Symbol.Name;
+         Alloc_Symbol.Mode := Intern ("C");
+         Global_Symbol_Table.Insert (Intern (Alloc_Name), Alloc_Symbol);
 
          --  Record it for the future:
          Array_Dup_Map.Replace_Element (Map_Cursor, Symbol_Expr (Func_Symbol));
