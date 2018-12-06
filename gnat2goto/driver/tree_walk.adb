@@ -265,11 +265,13 @@ package body Tree_Walk is
 
    function Get_Array_Copy_Function (LHS_Element_Type : Entity_Id;
                                      RHS_Element_Type : Entity_Id;
-                                     Index_Type : Entity_Id) return Irep
+                                     Index_Type : Entity_Id;
+                                     Len_Expr : Irep) return Irep
    with Post => Kind (Get_Array_Copy_Function'Result) = I_Symbol_Expr;
 
    function Get_Array_Dup_Function (Element_Type : Entity_Id;
-                                    Index_Type : Entity_Id) return Irep
+                                    Index_Type : Entity_Id;
+                                    Len_Expr : Irep) return Irep
    with Post => Kind (Get_Array_Dup_Function'Result) = I_Symbol_Expr;
 
    function Can_Get_Array_Index_Type (N : Node_Id) return Boolean;
@@ -579,7 +581,8 @@ package body Tree_Walk is
       Append_Struct_Member (Result_Struct, High_Expr);
       declare
          Dup : constant Irep :=
-           Get_Array_Dup_Function (Element_Type_Ent, Index_Type_Node);
+           Get_Array_Dup_Function (Element_Type_Ent,
+                                   Index_Type_Node, Len_Expr);
          Call_Args : constant Irep := New_Irep (I_Argument_List);
          Call_Expr : constant Irep :=
            Make_Side_Effect_Expr_Function_Call (I_Function => Dup,
@@ -787,7 +790,8 @@ package body Tree_Walk is
       Copy_Func :=
         Get_Array_Copy_Function (LHS_Element_Type,
                                  RHS_Element_Type,
-                                 LHS_Idx_Type);
+                                 LHS_Idx_Type,
+                                 LHS_Length);
 
       if not (Kind (Get_Type (RHS_Expr)) in Class_Type)
       then
@@ -2652,7 +2656,8 @@ package body Tree_Walk is
                Callee : constant Irep :=
                  Get_Array_Copy_Function (New_Component_Type,
                                           Source_Eltype,
-                                          New_Index_Type);
+                                          New_Index_Type,
+                                          Source_Length);
                Source_Data : constant Irep := New_Irep (I_Member_Expr);
                Call : constant Irep :=
                  New_Irep (I_Side_Effect_Expr_Function_Call);
@@ -3715,7 +3720,8 @@ package body Tree_Walk is
 
    function Get_Array_Copy_Function (LHS_Element_Type : Entity_Id;
                                      RHS_Element_Type : Entity_Id;
-                                     Index_Type : Entity_Id) return Irep is
+                                     Index_Type : Entity_Id;
+                                     Len_Expr : Irep) return Irep is
       Map_Key : constant Array_Copy_Key :=
         (LHS_Element_Type, RHS_Element_Type, Index_Type);
       Map_Cursor : Array_Copy_Maps.Cursor;
@@ -3751,6 +3757,8 @@ package body Tree_Walk is
          RHS_Cast : Irep;
          Counter_Sym : constant Irep :=
            Fresh_Var_Symbol_Expr (Len_Type, "idx");
+         Xx_Dummy_Var : constant Irep :=
+           Fresh_Var_Symbol_Expr (Len_Type, "idx");
       begin
          --  Create type (lhs_el_type*, rhs_el_type*, index_type) -> void
          Set_Type (Write_Ptr_Arg, LHS_Ptr_Type);
@@ -3771,10 +3779,11 @@ package body Tree_Walk is
          --  Create function body (declarations and a copy for-loop):
          Append_Declare_And_Init
            (Counter_Sym, Make_Integer_Constant (0, Index_Type), Body_Block, 0);
-
+         Append_Declare_And_Init
+           (Xx_Dummy_Var, Param_Symbol (Len_Arg), Body_Block, 0);
          Set_Iter (Body_Loop, Make_Increment (Counter_Sym, Index_Type, 1));
          Set_Lhs (Loop_Test, Counter_Sym);
-         Set_Rhs (Loop_Test, Param_Symbol (Len_Arg));
+         Set_Rhs (Loop_Test, Len_Expr);
          Set_Type (I     => Loop_Test,
                    Value => Make_Bool_Type);
          Set_Cond (Body_Loop, Loop_Test);
@@ -3822,7 +3831,8 @@ package body Tree_Walk is
    ----------------------------
 
    function Get_Array_Dup_Function (Element_Type : Entity_Id;
-                                    Index_Type : Entity_Id) return Irep is
+                                    Index_Type : Entity_Id;
+                                    Len_Expr : Irep) return Irep is
       Map_Key : constant Array_Dup_Key := (Element_Type, Index_Type);
       Map_Cursor : Array_Dup_Maps.Cursor;
       Map_Inserted : Boolean;
@@ -3888,7 +3898,8 @@ package body Tree_Walk is
          Set_Function (Call_Inst,
                        Get_Array_Copy_Function (Element_Type,
                                                 Element_Type,
-                                                Index_Type));
+                                                Index_Type,
+                                                Len_Expr));
          Append_Op (Body_Block, Call_Inst);
 
          Set_Return_Value (Return_Inst, Array_Copy);
