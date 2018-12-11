@@ -22,6 +22,8 @@ with Urealp; use Urealp;
 
 package body Tree_Walk is
 
+   function Make_Malloc_Function_Call (Size : Irep) return Irep;
+
    procedure Add_Entity_Substitution (E : Entity_Id; Subst : Irep);
 
    procedure Append_Declare_And_Init
@@ -352,6 +354,21 @@ package body Tree_Walk is
    function Report_Unhandled_Node_Kind (N : Node_Id;
                                         Fun_Name : String;
                                         Message : String) return Irep_Kind;
+
+   function Make_Malloc_Function_Call (Size : Irep) return Irep is
+      Func_Type : constant Irep :=
+        New_Irep (I_Code_Function_Call);
+      Sym_Malloc   : constant Irep := New_Irep (I_Symbol_Expr);
+      Malloc_Args  : constant Irep := New_Irep (I_Argument_List);
+   begin
+      Set_Identifier (Sym_Malloc, "malloc");
+      Set_Type (Sym_Malloc, New_Irep (I_Code_Type));
+      Append_Argument (Malloc_Args, Size);
+      Set_Function        (Func_Type, Sym_Malloc);
+      Set_Arguments       (Func_Type, Malloc_Args);
+      Set_Type            (Func_Type, Make_Pointer_Type (Make_Void_Type));
+      return Func_Type;
+   end Make_Malloc_Function_Call;
 
    procedure Report_Unhandled_Node_Empty (N : Node_Id;
                                           Fun_Name : String;
@@ -768,6 +785,8 @@ package body Tree_Walk is
         Make_Pointer_Type (Do_Type_Reference (LHS_Element_Type));
       RHS_Data_Type : constant Irep :=
         Make_Pointer_Type (Do_Type_Reference (RHS_Element_Type));
+      LHS_fun_call : constant Irep :=
+        Fresh_Var_Symbol_Expr (LHS_Data_Type, "copy_fun_lhs");
    begin
       if not Can_Get_Array_Index_Type (Name (N)) then
          Report_Unhandled_Node_Empty (N, "Do_Array_Assignment",
@@ -836,6 +855,7 @@ package body Tree_Walk is
 
       Append_Op (Ret, Make_Code_Function_Call (I_Function => Copy_Func,
                                                Arguments => Copy_Args,
+                                               Lhs => LHS_fun_call,
                                                Source_Location => Sloc (N)));
 
       return Ret;
@@ -1836,6 +1856,8 @@ package body Tree_Walk is
          when E_Record_Subtype => Do_Itype_Record_Subtype (N),
          when E_Signed_Integer_Type => Do_Itype_Integer_Type (N),
          when E_Floating_Point_Type => Create_Dummy_Irep,
+         when E_Anonymous_Access_Type => Make_Pointer_Type
+        (Base => Do_Type_Reference (Designated_Type (Etype (N)))),
          when others => Report_Unhandled_Node_Irep (N, "Do_Itype_Definition",
                                                     "Unknown Ekind"));
    end Do_Itype_Definition;
@@ -3770,7 +3792,11 @@ package body Tree_Walk is
          Set_Iter (Body_Loop, Make_Increment (Counter_Sym, Index_Type, 1));
          Set_Lhs (Loop_Test, Counter_Sym);
          Set_Rhs (Loop_Test, Param_Symbol (Len_Arg));
+         Set_Type (I     => Loop_Test,
+                   Value => Make_Bool_Type);
          Set_Cond (Body_Loop, Loop_Test);
+         Set_Init (I     => Body_Loop,
+                   Value => Make_Nil (Sloc (RHS_Element_Type)));
 
          Set_Lhs (Loop_Assign,
                   Make_Pointer_Index (Param_Symbol (Write_Ptr_Arg),
@@ -3834,19 +3860,28 @@ package body Tree_Walk is
          Len_Arg : constant Irep := New_Irep (I_Code_Parameter);
          Len_Type : constant Irep := Do_Type_Reference (Index_Type);
          Func_Symbol : Symbol;
+         Alloc_Symbol : Symbol;
          Map_Size_Str : constant String :=
            Integer'Image (Integer (Array_Dup_Map.Length));
          Func_Name : constant String :=
            "__ada_dup_array" & Map_Size_Str (2 .. Map_Size_Str'Last);
+         Alloc_Name : constant String := "__new_array";
          Array_Copy : constant Irep :=
            Fresh_Var_Symbol_Expr (Ptr_Type, "new_array");
-         Array_Alloc : constant Irep :=
-           New_Irep (I_Side_Effect_Expr_Cpp_New_Array);
          Body_Block : constant Irep := New_Irep (I_Code_Block);
          Call_Inst : constant Irep := New_Irep (I_Code_Function_Call);
          Call_Args : constant Irep := New_Irep (I_Argument_List);
          Return_Inst : constant Irep := New_Irep (I_Code_Return);
-
+         Lhs_fun_call : constant Irep :=
+           Fresh_Var_Symbol_Expr (Do_Type_Reference (Element_Type),
+                                  "array_dup_fun_lhs");
+         --  --------------------------------------------------
+         --  NEW VARS FOR MALLOC ALLOCATION
+         Type_Width : constant Integer :=
+           Positive (UI_To_Int (Esize (Element_Type)));
+         Member_Size : constant Irep :=
+           (Make_Integer_Constant (Type_Width, Index_Type));
+         --  --------------------------------------------------
       begin
 
          --  Create type (element_type*, index_type) -> element_type*
@@ -3862,13 +3897,37 @@ package body Tree_Walk is
          Set_Return_Type (Func_Type, Ptr_Type);
 
          --  Create body (allocate and then call array_copy)
-         Set_Size (Array_Alloc, Param_Symbol (Len_Arg));
-         Set_Type (Array_Alloc, Ptr_Type);
-         Append_Declare_And_Init (Array_Copy, Array_Alloc, Body_Block, 0);
+         --  --------------------------------------------------
+         --  NB THIS WORKS IN C, NOT IN C++: 'int *a = malloc(sizeof(int));'
+         Append_Declare_And_Init (Array_Copy,
+                          Make_Malloc_Function_Call (
+                            Make_Op_Mul (
+                              Lhs => Member_Size,
+                              Rhs => Param_Symbol (Len_Arg),
+                              I_Type => Make_Integer_Type,
+                              Source_Location => Sloc (Element_Type))),
+                                  Body_Block, 0);
+         --  --------------------------------------------------
+         --  TYPECAST VERSION
+         --  Append_Declare_And_Init (
+         --    Array_Copy,
+         --    Make_Op_Typecast (
+         --      Op0 =>  Make_Malloc_Function_Call (
+         --        Make_Op_Mul (
+         --          Lhs => Member_Size,
+         --          Rhs => Param_Symbol (Len_Arg),
+         --          I_Type => Make_Integer_Type,
+         --          Source_Location => Sloc (Element_Type))),
+         --          I_Type => Ptr_Type,
+         --      Source_Location => Sloc ((Element_Type))),
+         --    Body_Block, 0);
+         --  --------------------------------------------------
          Append_Argument (Call_Args, Array_Copy);
          Append_Argument (Call_Args, Param_Symbol (Ptr_Arg));
          Append_Argument (Call_Args, Param_Symbol (Len_Arg));
          Set_Arguments (Call_Inst, Call_Args);
+         Set_Lhs (I     => Call_Inst,
+                  Value => Lhs_fun_call);
          Set_Function (Call_Inst,
                        Get_Array_Copy_Function (Element_Type,
                                                 Element_Type,
@@ -3886,6 +3945,13 @@ package body Tree_Walk is
          Func_Symbol.Mode := Intern ("C");
          Func_Symbol.Value := Body_Block;
          Global_Symbol_Table.Insert (Intern (Func_Name), Func_Symbol);
+         --  Add allocation function to symbol table
+         Alloc_Symbol.SymType := Func_Type;
+         Alloc_Symbol.Name := Intern (Alloc_Name);
+         Alloc_Symbol.PrettyName := Alloc_Symbol.Name;
+         Alloc_Symbol.BaseName := Alloc_Symbol.Name;
+         Alloc_Symbol.Mode := Intern ("C");
+         Global_Symbol_Table.Insert (Intern (Alloc_Name), Alloc_Symbol);
 
          --  Record it for the future:
          Array_Dup_Map.Replace_Element (Map_Cursor, Symbol_Expr (Func_Symbol));
