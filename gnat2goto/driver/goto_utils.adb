@@ -92,6 +92,42 @@ package body GOTO_Utils is
       return Ret;
    end Symbol_Expr;
 
+      --------------------------
+      -- Create_Fun_Parameter --
+      --------------------------
+
+   function Create_Fun_Parameter (Fun_Name : String; Param_Name : String;
+                                  Param_Type : Irep; Param_List : Irep;
+                                  A_Symbol_Table : in out Symbol_Table;
+                                  Source_Location : Source_Ptr := No_Location)
+                                  return Irep is
+      Func_Param_Id : constant Symbol_Id := Intern (Fun_Name & Param_Name);
+      Value_Symbol : constant Symbol := (Name => Func_Param_Id,
+                                         BaseName => Intern (Param_Name),
+                                         PrettyName => Intern (Param_Name),
+                                         Mode => Intern ("C"),
+                                         SymType => Param_Type,
+                                         IsParameter => True,
+                                         IsLValue => True,
+                                         IsFileLocal => True,
+                                         IsThreadLocal => True,
+                                         others => <>);
+      Value_Arg : constant Irep :=
+        Make_Code_Parameter (Source_Location => Source_Location,
+                             Default_Value   => Ireps.Empty,
+                             Base_Name       => Param_Name,
+                             This            => False,
+                             Identifier      => Unintern (Func_Param_Id));
+   begin
+      A_Symbol_Table.Insert (Func_Param_Id, Value_Symbol);
+      Set_Type (Value_Arg, Param_Type);
+      Set_Identifier (Value_Arg, Unintern (Func_Param_Id));
+      Set_Base_Name (Value_Arg, "value");
+      Append_Parameter (Param_List, Value_Arg);
+
+      return Value_Arg;
+   end Create_Fun_Parameter;
+
    ---------------------
    -- Name_Has_Prefix --
    ---------------------

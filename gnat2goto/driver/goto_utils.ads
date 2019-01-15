@@ -29,6 +29,15 @@ package GOTO_Utils is
    function Symbol_Expr (Sym : Symbol) return Irep
    with Post => Kind (Symbol_Expr'Result) = I_Symbol_Expr;
 
+   function Create_Fun_Parameter (Fun_Name : String; Param_Name : String;
+                                  Param_Type : Irep; Param_List : Irep;
+                                  A_Symbol_Table : in out Symbol_Table;
+                                  Source_Location : Source_Ptr := No_Location)
+                                  return Irep
+     with Pre => (Kind (Param_Type) in Class_Type
+                  and then Kind (Param_List) = I_Parameter_List),
+     Post => Kind (Create_Fun_Parameter'Result) = I_Code_Parameter;
+
    function Name_Has_Prefix (N : Node_Id; Prefix : String) return Boolean;
 
    function Has_GNAT2goto_Annotation
