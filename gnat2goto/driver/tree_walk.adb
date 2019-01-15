@@ -21,12 +21,17 @@ with Ada.Exceptions;
 with GNAT2GOTO.Options;
 with Urealp; use Urealp;
 
+with Range_Check; use Range_Check;
+
 package body Tree_Walk is
 
    procedure Add_Entity_Substitution (E : Entity_Id; Subst : Irep);
 
    procedure Append_Declare_And_Init
      (Symbol : Irep; Value : Irep; Block : Irep; Source_Loc : Source_Ptr);
+
+   function Add_To_Table (Name : String; Symbol_Type : Irep; Value : Irep)
+                         return Symbol;
 
    procedure Declare_Itype (Ty : Entity_Id);
 
@@ -57,7 +62,7 @@ package body Tree_Walk is
    function Do_Assignment_Statement (N  : Node_Id) return Irep
    with Pre  => Nkind (N) = N_Assignment_Statement,
         Post => Kind (Do_Assignment_Statement'Result) in
-                I_Code_Assign | I_Code_Block;
+                I_Code_Assign;
 
    function Do_Bare_Range_Constraint (Range_Expr : Node_Id; Underlying : Irep)
                                      return Irep
@@ -118,13 +123,21 @@ package body Tree_Walk is
    with Pre  => Nkind (N) = N_Function_Call,
         Post => Kind (Do_Function_Call'Result) in Class_Expr;
 
+   function Make_Assume_Expr (N : Node_Id; Assumption : Irep) return Irep;
+
+   function Make_Assert_Call (N : Node_Id; Assertion : Irep;
+                                           Description : Irep) return Irep;
+
+   function Make_Range_Assert_Expr (N : Node_Id; Value : Irep;
+                                                Value_Type : Irep) return Irep;
+
    function Do_Nondet_Function_Call (N : Node_Id) return Irep
    with Pre  => Nkind (N) = N_Function_Call,
         Post => Kind (Do_Nondet_Function_Call'Result) in Class_Expr;
 
-   function Make_Sym_Range_Expression (I : Irep) return Irep
-   with Pre  => Kind (I) = I_Symbol_Expr,
-        Post => Kind (Make_Sym_Range_Expression'Result) in Class_Expr;
+   function Make_Range_Expression (Value_Expr : Irep; Val_Type : Irep)
+                                   return Irep
+   with Post => Kind (Make_Range_Expression'Result) in Class_Expr;
 
    function Do_Handled_Sequence_Of_Statements (N : Node_Id) return Irep
    with Pre  => Nkind (N) = N_Handled_Sequence_Of_Statements,
@@ -388,6 +401,7 @@ package body Tree_Walk is
       Report_Unhandled_Node_Empty (N, Fun_Name, Message);
       return I_Empty;
    end Report_Unhandled_Node_Kind;
+
    -----------------------------
    -- Add_Entity_Substitution --
    -----------------------------
@@ -880,6 +894,97 @@ package body Tree_Walk is
       return Do_Bare_Range_Constraint (N, Underlying);
    end Do_Array_Range;
 
+   ------------------
+   -- Add_To_Table --
+   ------------------
+
+   function Add_To_Table (Name : String; Symbol_Type : Irep; Value : Irep)
+                           return Symbol is
+      New_Symbol : Symbol;
+   begin
+      New_Symbol.SymType := Symbol_Type;
+      New_Symbol.Name := Intern (Name);
+      New_Symbol.PrettyName := New_Symbol.Name;
+      New_Symbol.BaseName := New_Symbol.Name;
+      New_Symbol.Mode := Intern ("C");
+      New_Symbol.Value := Value;
+
+      if not (Global_Symbol_Table.Contains (Key => Intern (Name))) then
+         Global_Symbol_Table.Insert (Intern (Name), New_Symbol);
+      end if;
+      return New_Symbol;
+   end Add_To_Table;
+
+   function Make_Range_Assert_Expr (N : Node_Id; Value : Irep;
+                                                 Value_Type : Irep)
+                                    return Irep
+   is
+      Call_Inst : constant Irep := New_Irep (I_Side_Effect_Expr_Function_Call);
+      Call_Args : constant Irep := New_Irep (I_Argument_List);
+      Actual_Type : constant Irep := Follow_Symbol_Type (Get_Type (Value),
+                                                         Global_Symbol_Table);
+
+      function Build_Assert_Function return Symbol;
+
+      ---------------------------
+      -- Build_Assert_Function --
+      ---------------------------
+
+      function Build_Assert_Function return Symbol
+      is
+         Func_Type : constant Irep := New_Irep (I_Code_Type);
+         Func_Args : constant Irep := New_Irep (I_Parameter_List);
+         Func_Name : constant String :=
+           Fresh_Var_Name ("range_check");
+         Body_Block : constant Irep := New_Irep (I_Code_Block);
+         Return_Inst : constant Irep := New_Irep (I_Code_Return);
+         Description : constant Irep := New_Irep (I_String_Constant_Expr);
+         Value_Param : Irep := New_Irep (I_Symbol_Expr);
+         Value_Arg : constant Irep :=
+           Create_Fun_Parameter (Fun_Name        => Func_Name,
+                                 Param_Name      => "value",
+                                 Param_Type      => Actual_Type,
+                                 Param_List      => Func_Args,
+                                 A_Symbol_Table  => Global_Symbol_Table,
+                                 Source_Location => Sloc (N));
+      begin
+         --  Create type (value_type) -> element_type
+
+         Set_Parameters (Func_Type, Func_Args);
+         Set_Return_Type (Func_Type, Actual_Type);
+         Set_Ellipsis (Func_Type, False);
+
+         --  Create body (allocate and then call array_copy)
+         Value_Param := Param_Symbol (Value_Arg);
+         Set_Return_Value (Return_Inst, Value_Param);
+         Set_Value (I     => Description,
+                    Value => "Range Check");
+         Append_Op (Body_Block,
+                    Make_Assert_Call (Expression (N),
+                      Make_Range_Expression
+                        (Value_Param, Value_Type),
+                      Description));
+         Append_Op (Body_Block, Return_Inst);
+
+         return Add_To_Table (Name        => Func_Name,
+                              Symbol_Type => Func_Type,
+                              Value       => Body_Block);
+      end Build_Assert_Function;
+
+   begin
+      Append_Argument (Call_Args, Value);
+
+      Set_Function (I     => Call_Inst,
+                    Value => Symbol_Expr (Build_Assert_Function));
+      Set_Arguments (I     => Call_Inst,
+                     Value => Call_Args);
+      Set_Source_Location (I     => Call_Inst,
+                           Value => Sloc (N));
+      Set_Type (I     => Call_Inst,
+                Value => Actual_Type);
+      return Call_Inst;
+   end Make_Range_Assert_Expr;
+
    -----------------------------
    -- Do_Assignment_Statement --
    -----------------------------
@@ -892,23 +997,31 @@ package body Tree_Walk is
       if Ekind (Etype (Name (N))) in Array_Kind then
          return Do_Array_Assignment (LHS, RHS, N);
       end if;
-      return R : constant Irep := New_Irep (I_Code_Assign) do
+
+      declare
+         R : constant Irep := New_Irep (I_Code_Assign);
+      begin
          Set_Source_Location (R, Sloc (N));
          Set_Lhs (R, LHS);
          if Do_Range_Check (Expression (N)) then
-            --  Implicit typecast. Make it explicit.
             declare
                Cast_RHS : constant Irep := New_Irep (I_Op_Typecast);
             begin
-               Set_Op0 (Cast_RHS, RHS);
+               Set_Op0 (I     => Cast_RHS,
+                        Value => Make_Range_Assert_Expr (
+                          N          => N,
+                          Value      => RHS,
+                          Value_Type => Get_Type (LHS)));
+               --  Set_Op0 (Cast_RHS, RHS);
                Set_Type (Cast_RHS, Get_Type (LHS));
-               Set_Range_Check (Cast_RHS, True);
-               Set_Rhs (R, Cast_RHS);
+               Set_Rhs (I     => R,
+                        Value => Cast_RHS);
             end;
          else
             Set_Rhs (R, RHS);
          end if;
-      end return;
+         return R;
+      end;
    end Do_Assignment_Statement;
 
    ------------------------------
@@ -939,8 +1052,12 @@ package body Tree_Walk is
       end if;
       return R : constant Irep := New_Irep (I_Bounded_Signedbv_Type) do
          Set_Width (R, Get_Width (Resolved_Underlying));
-         Set_Lower_Bound (R, Do_Constant (Low_Bound (Range_Expr)));
-         Set_Upper_Bound (R, Do_Constant (High_Bound (Range_Expr)));
+         Set_Lower_Bound (I     => R,
+                          Value => Store_Bound (Bound_Type (Intval (
+                            Low_Bound (Range_Expr)))));
+         Set_Upper_Bound (I     => R,
+                          Value => Store_Bound (Bound_Type (Intval (
+                            High_Bound (Range_Expr)))));
       end return;
    end Do_Bare_Range_Constraint;
 
@@ -1171,7 +1288,7 @@ package body Tree_Walk is
       Set_Value (Ret, "00000000000000000000000000000000");
 
       if Is_Integer_Literal then
-         Constant_Resolved_Type :=  New_Irep (I_Signedbv_Type);
+         Constant_Resolved_Type :=  Constant_Type;
       else
          if not Global_Symbol_Table.Contains (
                                               Intern (Get_Identifier
@@ -1199,9 +1316,14 @@ package body Tree_Walk is
 
       Set_Source_Location (Ret, Sloc (N));
       Set_Type (Ret, Constant_Resolved_Type);
-      Set_Value (Ret,
-                 Convert_Uint_To_Hex
+      if not Is_Integer_Literal then
+         Set_Value (Ret,
+                    Convert_Uint_To_Hex
                       (Intval (N), Pos (Constant_Width)));
+      else
+         Set_Value (Ret, UI_Image (Input  => Intval (N),
+                                   Format => Decimal));
+      end if;
       return Ret;
    end Do_Constant;
 
@@ -1509,35 +1631,77 @@ package body Tree_Walk is
    end Do_Full_Type_Declaration;
 
    -------------------------------
-   -- Make_Sym_Range_Expression --
+   -- Make_Range_Expression --
    -------------------------------
 
-   function Make_Sym_Range_Expression (I : Irep) return Irep is
-      Sym_Type : Irep := Get_Type (I);
-
+   function Make_Range_Expression (Value_Expr : Irep; Val_Type : Irep)
+                                   return Irep
+   is
+      --  Sym_Type : Irep := Get_Type (I);
+      Bound_Type : constant Irep := Follow_Symbol_Type (Val_Type,
+                                                        Global_Symbol_Table);
+      Value_Expr_Type : constant Irep := Follow_Symbol_Type (
+                                                    Get_Type (Value_Expr),
+                                                    Global_Symbol_Table);
    begin
-      --  get underlying type
-      while Kind (Sym_Type) = I_Symbol_Type loop
-         Sym_Type := Follow_Symbol_Type
-           (Sym_Type, Global_Symbol_Table);
-      end loop;
-
-      if Kind (Sym_Type) = I_Bounded_Signedbv_Type then
+      if Kind (Bound_Type) = I_Bounded_Signedbv_Type then
          declare
             Op_Geq : constant Irep := New_Irep (I_Op_Geq);
             Op_Leq : constant Irep := New_Irep (I_Op_Leq);
+            Lower_Bound : constant Irep := New_Irep (I_Constant_Expr);
+            Upper_Bound : constant Irep := New_Irep (I_Constant_Expr);
+            Adjusted_Value_Expr : Irep;
+            Adjusted_Lower_Bound : Irep;
+            Adjusted_Upper_Bound : Irep;
+            Source_Location : constant Source_Ptr := Get_Source_Location
+              (Value_Expr);
          begin
-            Set_Lhs (Op_Geq, I);
-            Set_Rhs (Op_Geq, Get_Lower_Bound (Sym_Type));
+            --  The compared expressions (value and bound) have to be of the
+            --  same type
+            if Get_Width (Bound_Type) > Get_Width (Value_Expr_Type)
+            then
+               --  If the value checked for being in the range is of smaller
+               --  type then we need to cast it to the type of the bounds
+               Adjusted_Value_Expr := Make_Op_Typecast (
+                                            Op0             => Value_Expr,
+                                            Source_Location => Source_Location,
+                                            I_Type          => Bound_Type);
+               Adjusted_Lower_Bound := Lower_Bound;
+               Adjusted_Upper_Bound := Upper_Bound;
+            else
+               --  If the bounds are of smaller type then we cast the bounds
+               --  to the type of the value being checked
+               Adjusted_Value_Expr := Value_Expr;
+               Adjusted_Lower_Bound := Make_Op_Typecast (
+                           Op0             => Lower_Bound,
+                           Source_Location => Source_Location,
+                           I_Type          => Value_Expr_Type);
+               Adjusted_Upper_Bound := Make_Op_Typecast (
+                           Op0             => Upper_Bound,
+                           Source_Location => Source_Location,
+                           I_Type          => Value_Expr_Type);
+            end if;
+            Set_Lhs (Op_Geq, Adjusted_Value_Expr);
+            Set_Type (I     => Lower_Bound,
+                      Value => Bound_Type);
+            Set_Value (I     => Lower_Bound,
+                      Value => Load_Bound_In_Hex (Get_Lower_Bound (Bound_Type),
+                        Pos (Get_Width (Bound_Type))));
+            Set_Rhs (Op_Geq, Adjusted_Lower_Bound);
             Set_Type (Op_Geq, Make_Bool_Type);
-            Set_Lhs (Op_Leq, I);
-            Set_Rhs (Op_Leq, Get_Upper_Bound (Sym_Type));
+            Set_Lhs (Op_Leq, Adjusted_Value_Expr);
+            Set_Type (I     => Upper_Bound,
+                      Value => Bound_Type);
+            Set_Value (I     => Upper_Bound,
+                      Value => Load_Bound_In_Hex (Get_Upper_Bound (Bound_Type),
+                        Pos (Get_Width (Bound_Type))));
+            Set_Rhs (Op_Leq, Adjusted_Upper_Bound);
             Set_Type (Op_Leq, Make_Bool_Type);
             return R : constant Irep := New_Irep (I_Op_And) do
                Append_Op (R, Op_Geq);
                Append_Op (R, Op_Leq);
                Set_Type (R, Make_Bool_Type);
-               Set_Source_Location (R, Get_Source_Location (I));
+               Set_Source_Location (R, Source_Location);
             end return;
          end;
       else
@@ -1546,7 +1710,56 @@ package body Tree_Walk is
             Set_Type (R, Make_Bool_Type);
          end return;
       end if;
-   end Make_Sym_Range_Expression;
+   end Make_Range_Expression;
+
+   ----------------------
+   -- Make_Assume_Expr --
+   ----------------------
+
+   function Make_Assume_Expr (N : Node_Id; Assumption : Irep) return Irep is
+      SE_Call_Expr : constant Irep :=
+        New_Irep (I_Side_Effect_Expr_Function_Call);
+      Sym_Assume   : constant Irep := New_Irep (I_Symbol_Expr);
+      Assume_Args  : constant Irep := New_Irep (I_Argument_List);
+   begin
+      Set_Identifier (Sym_Assume, "__CPROVER_assume");
+      Set_Type (Sym_Assume, New_Irep (I_Code_Type));
+
+      Append_Argument (Assume_Args, Assumption);
+
+      Set_Source_Location (SE_Call_Expr, Sloc (N));
+      Set_Function        (SE_Call_Expr, Sym_Assume);
+      Set_Arguments       (SE_Call_Expr, Assume_Args);
+      Set_Type            (SE_Call_Expr, Make_Void_Type);
+      return SE_Call_Expr;
+   end Make_Assume_Expr;
+
+   ----------------------
+   -- Make_Assert_Call --
+   ----------------------
+
+   function Make_Assert_Call (N : Node_Id; Assertion : Irep;
+                                           Description : Irep)
+                             return Irep is
+      SE_Call_Expr : constant Irep :=
+        New_Irep (I_Code_Function_Call);
+      Sym_Assert   : constant Irep := New_Irep (I_Symbol_Expr);
+      Assert_Args  : constant Irep := New_Irep (I_Argument_List);
+   begin
+      Set_Identifier (Sym_Assert, "__CPROVER_assert");
+      Set_Type (Sym_Assert, New_Irep (I_Code_Type));
+
+      Append_Argument (Assert_Args, Assertion);
+      Append_Argument (Assert_Args, Description);
+
+      Set_Lhs (I     => SE_Call_Expr,
+               Value => Make_Nil (Sloc (N)));
+      Set_Source_Location (SE_Call_Expr, Sloc (N));
+      Set_Function        (SE_Call_Expr, Sym_Assert);
+      Set_Arguments       (SE_Call_Expr, Assert_Args);
+      Set_Type            (SE_Call_Expr, Make_Void_Type);
+      return SE_Call_Expr;
+   end Make_Assert_Call;
 
    -----------------------------
    -- Do_Nondet_Function_Call --
@@ -1575,25 +1788,12 @@ package body Tree_Walk is
             Sym_Nondet   : constant Irep :=
               Fresh_Var_Symbol_Expr (Type_Irep, Func_Str);
             SE_Call_Expr : constant Irep :=
-              New_Irep (I_Side_Effect_Expr_Function_Call);
+              Make_Assume_Expr (N, Make_Range_Expression (Sym_Nondet,
+                                                       Get_Type (Sym_Nondet)));
             Nondet_Expr  : constant Irep :=
               New_Irep (I_Side_Effect_Expr_Nondet);
-            Sym_Assume   : constant Irep := New_Irep (I_Symbol_Expr);
-            Assume_Args  : constant Irep := New_Irep (I_Argument_List);
             Assume_And_Yield : constant Irep := New_Irep (I_Op_Comma);
-
          begin
-            Set_Identifier (Sym_Assume, "__CPROVER_assume");
-            Set_Type (Sym_Assume, New_Irep (I_Code_Type));
-
-            Append_Argument (Assume_Args,
-                             Make_Sym_Range_Expression (Sym_Nondet));
-
-            Set_Source_Location (SE_Call_Expr, Sloc (N));
-            Set_Function        (SE_Call_Expr, Sym_Assume);
-            Set_Arguments       (SE_Call_Expr, Assume_Args);
-            Set_Type            (SE_Call_Expr, Make_Void_Type);
-
             Set_Source_Location (Sym_Nondet, Sloc (N));
             Set_Type (Nondet_Expr, Type_Irep);
             Set_Source_Location (Nondet_Expr, Sloc (N));
@@ -1917,10 +2117,13 @@ package body Tree_Walk is
                                             "Non-literal bound unsupported");
       end if;
       return
-        Make_Bounded_Signedbv_Type (Lower_Bound => Lower_Bound,
-                                    Upper_Bound => Upper_Bound,
-                                    Width => Positive (UI_To_Int (Esize (N))),
-                                    I_Subtype => Ireps.Empty);
+        Make_Bounded_Signedbv_Type (
+                               Lower_Bound => Store_Bound (Bound_Type (Intval (
+                                      Low_Bound (Scalar_Range (N))))),
+                               Upper_Bound => Store_Bound (Bound_Type (Intval (
+                                      High_Bound (Scalar_Range (N))))),
+                               Width       => Positive (UI_To_Int (Esize (N))),
+                               I_Subtype   => Ireps.Empty);
    end Do_Itype_Integer_Subtype;
 
    ------------------------------
@@ -1928,11 +2131,13 @@ package body Tree_Walk is
    ------------------------------
 
    function Do_Itype_Integer_Type (N : Entity_Id) return Irep is
-      (Make_Bounded_Signedbv_Type (
-         Lower_Bound => Do_Expression (Low_Bound (Scalar_Range (N))),
-         Upper_Bound => Do_Expression (High_Bound (Scalar_Range (N))),
-         Width => Positive (UI_To_Int (Esize (N))),
-         I_Subtype => Ireps.Empty));
+     (Make_Bounded_Signedbv_Type (
+                               Lower_Bound => Store_Bound (Bound_Type (Intval (
+                                      Low_Bound (Scalar_Range (N))))),
+                               Upper_Bound => Store_Bound (Bound_Type (Intval (
+                                      High_Bound (Scalar_Range (N))))),
+                               Width       => Positive (UI_To_Int (Esize (N))),
+                               I_Subtype   => Ireps.Empty));
 
    -----------------------------
    -- Do_Itype_Record_Subtype --
@@ -3309,8 +3514,6 @@ package body Tree_Walk is
    ----------------------------------
 
    function Do_Signed_Integer_Definition (N : Node_Id) return Irep is
-      Lower : constant Irep := Do_Constant (Low_Bound (N));
-      Upper : constant Irep := Do_Constant (High_Bound (N));
       Ret   : constant Irep := New_Irep (I_Bounded_Signedbv_Type);
 
       E : constant Entity_Id := Defining_Entity (Parent (N));
@@ -3322,9 +3525,14 @@ package body Tree_Walk is
                                       "Entity id is not a type");
          return Ret;
       end if;
-      Set_Lower_Bound (Ret, Lower);
-      Set_Upper_Bound (Ret, Upper);
-      Set_Width       (Ret, Positive (UI_To_Int (Esize (E))));
+      Set_Lower_Bound (I     => Ret,
+                       Value => Store_Bound (Bound_Type (Intval (
+                         Low_Bound (N)))));
+      Set_Upper_Bound (I     => Ret,
+                       Value => Store_Bound (Bound_Type (Intval (
+                         High_Bound (N)))));
+      Set_Width (I     => Ret,
+                 Value => Positive (UI_To_Int (Esize (E))));
       return  Ret;
    end Do_Signed_Integer_Definition;
 
@@ -3595,11 +3803,17 @@ package body Tree_Walk is
       Ret        : constant Irep := New_Irep (I_Op_Typecast);
    begin
       Set_Source_Location (Ret, Sloc (N));
-      if Do_Range_Check (Expression (N)) then
-         Set_Range_Check (Ret, True);
-      end if;
-      Set_Op0  (Ret, To_Convert);
       Set_Type (Ret, New_Type);
+
+      if Do_Range_Check (Expression (N)) then
+         Set_Op0 (I     => Ret,
+                  Value => Make_Range_Assert_Expr (N          => N,
+                                                   Value      => To_Convert,
+                                                   Value_Type => New_Type));
+      else
+         Set_Op0  (Ret, To_Convert);
+      end if;
+
       return Ret;
    end Do_Type_Conversion;
 
