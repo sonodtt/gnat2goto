@@ -30,9 +30,6 @@ package body Tree_Walk is
    procedure Append_Declare_And_Init
      (Symbol : Irep; Value : Irep; Block : Irep; Source_Loc : Source_Ptr);
 
-   function Add_To_Table (Name : String; Symbol_Type : Irep; Value : Irep)
-                         return Symbol;
-
    procedure Declare_Itype (Ty : Entity_Id);
 
    function Do_Address_Of (N : Node_Id) return Irep
@@ -129,7 +126,7 @@ package body Tree_Walk is
                                            Description : Irep) return Irep;
 
    function Make_Range_Assert_Expr (N : Node_Id; Value : Irep;
-                                                Value_Type : Irep) return Irep;
+                                    Bounds_Type : Irep) return Irep;
 
    function Do_Nondet_Function_Call (N : Node_Id) return Irep
    with Pre  => Nkind (N) = N_Function_Call,
@@ -894,29 +891,8 @@ package body Tree_Walk is
       return Do_Bare_Range_Constraint (N, Underlying);
    end Do_Array_Range;
 
-   ------------------
-   -- Add_To_Table --
-   ------------------
-
-   function Add_To_Table (Name : String; Symbol_Type : Irep; Value : Irep)
-                           return Symbol is
-      New_Symbol : Symbol;
-   begin
-      New_Symbol.SymType := Symbol_Type;
-      New_Symbol.Name := Intern (Name);
-      New_Symbol.PrettyName := New_Symbol.Name;
-      New_Symbol.BaseName := New_Symbol.Name;
-      New_Symbol.Mode := Intern ("C");
-      New_Symbol.Value := Value;
-
-      if not (Global_Symbol_Table.Contains (Key => Intern (Name))) then
-         Global_Symbol_Table.Insert (Intern (Name), New_Symbol);
-      end if;
-      return New_Symbol;
-   end Add_To_Table;
-
    function Make_Range_Assert_Expr (N : Node_Id; Value : Irep;
-                                                 Value_Type : Irep)
+                                                 Bounds_Type : Irep)
                                     return Irep
    is
       Call_Inst : constant Irep := New_Irep (I_Side_Effect_Expr_Function_Call);
@@ -930,45 +906,55 @@ package body Tree_Walk is
       -- Build_Assert_Function --
       ---------------------------
 
+      --  Build a symbol for the following function
+      --  Actual_Type range_check(Actual_Type value) {
+      --    assert (value >= Bounds_Type.lower_bound
+      --         && value <= Bounds_Type.upper_bound);
+      --    return value;
+      --  }
       function Build_Assert_Function return Symbol
       is
-         Func_Type : constant Irep := New_Irep (I_Code_Type);
-         Func_Args : constant Irep := New_Irep (I_Parameter_List);
-         Func_Name : constant String :=
-           Fresh_Var_Name ("range_check");
-         Body_Block : constant Irep := New_Irep (I_Code_Block);
-         Return_Inst : constant Irep := New_Irep (I_Code_Return);
-         Description : constant Irep := New_Irep (I_String_Constant_Expr);
-         Value_Param : Irep := New_Irep (I_Symbol_Expr);
+         Func_Name : constant String := Fresh_Var_Name ("range_check");
+         Body_Block : constant Irep := Make_Code_Block (Sloc (N));
+         Description : constant Irep := Make_String_Constant_Expr (
+                                             Source_Location => Sloc (N),
+                                             I_Type          => Ireps.Empty,
+                                             Range_Check     => False,
+                                             Value           => "Range Check");
+         Func_Params : constant Irep := New_Irep (I_Parameter_List);
          Value_Arg : constant Irep :=
            Create_Fun_Parameter (Fun_Name        => Func_Name,
                                  Param_Name      => "value",
                                  Param_Type      => Actual_Type,
-                                 Param_List      => Func_Args,
+                                 Param_List      => Func_Params,
                                  A_Symbol_Table  => Global_Symbol_Table,
                                  Source_Location => Sloc (N));
+         Func_Type : constant Irep := Make_Code_Type (
+                             --  Function parameters should only be created via
+                             --  Create_Fun_Parameter
+                                                    Parameters  => Func_Params,
+                                                    Ellipsis    => False,
+                                                    Return_Type => Actual_Type,
+                                                    Inlined     => False,
+                                                    Knr         => False);
+         Value_Param : constant Irep := Param_Symbol (Value_Arg);
+         --
+         Return_Inst : constant Irep := Make_Code_Return (
+                                               Return_Value    => Value_Param,
+                                               Source_Location => Sloc (N),
+                                               I_Type          => Ireps.Empty);
       begin
-         --  Create type (value_type) -> element_type
-
-         Set_Parameters (Func_Type, Func_Args);
-         Set_Return_Type (Func_Type, Actual_Type);
-         Set_Ellipsis (Func_Type, False);
-
-         --  Create body (allocate and then call array_copy)
-         Value_Param := Param_Symbol (Value_Arg);
-         Set_Return_Value (Return_Inst, Value_Param);
-         Set_Value (I     => Description,
-                    Value => "Range Check");
          Append_Op (Body_Block,
                     Make_Assert_Call (Expression (N),
                       Make_Range_Expression
-                        (Value_Param, Value_Type),
+                        (Value_Param, Bounds_Type),
                       Description));
          Append_Op (Body_Block, Return_Inst);
 
-         return Add_To_Table (Name        => Func_Name,
-                              Symbol_Type => Func_Type,
-                              Value       => Body_Block);
+         return New_Function_Symbol_Entry (Name        => Func_Name,
+                                           Symbol_Type => Func_Type,
+                                           Value       => Body_Block,
+                                        A_Symbol_Table => Global_Symbol_Table);
       end Build_Assert_Function;
 
    begin
@@ -1011,7 +997,7 @@ package body Tree_Walk is
                         Value => Make_Range_Assert_Expr (
                           N          => N,
                           Value      => RHS,
-                          Value_Type => Get_Type (LHS)));
+                          Bounds_Type => Get_Type (LHS)));
                --  Set_Op0 (Cast_RHS, RHS);
                Set_Type (Cast_RHS, Get_Type (LHS));
                Set_Rhs (I     => R,
@@ -1717,21 +1703,23 @@ package body Tree_Walk is
    ----------------------
 
    function Make_Assume_Expr (N : Node_Id; Assumption : Irep) return Irep is
-      SE_Call_Expr : constant Irep :=
+      Sym_Assume : constant Irep := Make_Symbol_Expr (
+                                     Source_Location => Sloc (N),
+                                     I_Type          => New_Irep (I_Code_Type),
+                                     Range_Check     => False,
+                                     Identifier      => "__CPROVER_assume");
+      SEE_Fun_Call : constant Irep :=
         New_Irep (I_Side_Effect_Expr_Function_Call);
-      Sym_Assume   : constant Irep := New_Irep (I_Symbol_Expr);
       Assume_Args  : constant Irep := New_Irep (I_Argument_List);
    begin
-      Set_Identifier (Sym_Assume, "__CPROVER_assume");
-      Set_Type (Sym_Assume, New_Irep (I_Code_Type));
 
       Append_Argument (Assume_Args, Assumption);
 
-      Set_Source_Location (SE_Call_Expr, Sloc (N));
-      Set_Function        (SE_Call_Expr, Sym_Assume);
-      Set_Arguments       (SE_Call_Expr, Assume_Args);
-      Set_Type            (SE_Call_Expr, Make_Void_Type);
-      return SE_Call_Expr;
+      Set_Source_Location (SEE_Fun_Call, Sloc (N));
+      Set_Function        (SEE_Fun_Call, Sym_Assume);
+      Set_Arguments       (SEE_Fun_Call, Assume_Args);
+      Set_Type            (SEE_Fun_Call, Make_Void_Type);
+      return SEE_Fun_Call;
    end Make_Assume_Expr;
 
    ----------------------
@@ -3809,7 +3797,7 @@ package body Tree_Walk is
          Set_Op0 (I     => Ret,
                   Value => Make_Range_Assert_Expr (N          => N,
                                                    Value      => To_Convert,
-                                                   Value_Type => New_Type));
+                                                   Bounds_Type => New_Type));
       else
          Set_Op0  (Ret, To_Convert);
       end if;

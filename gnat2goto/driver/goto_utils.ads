@@ -27,7 +27,17 @@ package GOTO_Utils is
         Post => Kind (Param_Symbol'Result) = I_Symbol_Expr;
 
    function Symbol_Expr (Sym : Symbol) return Irep
-   with Post => Kind (Symbol_Expr'Result) = I_Symbol_Expr;
+     with Post => Kind (Symbol_Expr'Result) = I_Symbol_Expr;
+
+   procedure New_Parameter_Symbol_Entry (Name_Id :               Symbol_Id;
+                                         BaseName :              String;
+                                         Symbol_Type :           Irep;
+                                         A_Symbol_Table : in out Symbol_Table);
+
+   function New_Function_Symbol_Entry (Name : String; Symbol_Type : Irep;
+                                       Value : Irep;
+                                       A_Symbol_Table : in out Symbol_Table)
+                                       return Symbol;
 
    function Create_Fun_Parameter (Fun_Name : String; Param_Name : String;
                                   Param_Type : Irep; Param_List : Irep;
