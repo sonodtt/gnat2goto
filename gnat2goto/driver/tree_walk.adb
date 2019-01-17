@@ -379,41 +379,19 @@ package body Tree_Walk is
 
    function Make_Malloc_Function_Call_Expr (Size : Irep) return Irep is
       Malloc_Args  : constant Irep := New_Irep (I_Argument_List);
-      Malloc_Params : constant Irep := New_Irep (I_Parameter_List);
       Source_Loc : constant Source_Ptr := Get_Source_Location (Size);
       Malloc_Name : constant String := "malloc";
-      Size_Param : constant Irep :=
-        Create_Fun_Parameter (Fun_Name        => Malloc_Name,
-                              Param_Name      => "size",
-                              Param_Type      =>
-                       Make_Symbol_Type (Identifier => "__CPROVER_size_t"),
-                              Param_List      => Malloc_Params,
-                              A_Symbol_Table  => Global_Symbol_Table,
-                              Source_Location => Source_Loc);
-      Malloc_Type : constant Irep :=
-        Make_Code_Type (Parameters  => Malloc_Params,
-                        Ellipsis    => False,
-                        Return_Type => Make_Pointer_Type (Make_Void_Type),
-                        Inlined     => False,
-                        Knr         => False);
-      Sym_Malloc   : constant Irep :=
-        Make_Symbol_Expr (Source_Location => Source_Loc,
-                          I_Type          => Malloc_Type,
-                          Range_Check     => False,
-                          Identifier      => Malloc_Name);
       Malloc_Call : constant Irep :=
         Make_Side_Effect_Expr_Function_Call (Arguments       => Malloc_Args,
-                                             I_Function      => Sym_Malloc,
+                                             I_Function      => Symbol_Expr (
+                                   Global_Symbol_Table (Intern (Malloc_Name))),
                                              Source_Location => Source_Loc,
                         I_Type          => Make_Pointer_Type (Make_Void_Type));
    begin
-      if Kind (Size_Param) = I_Code_Parameter then
-         Append_Argument (Malloc_Args,
-                          Make_Op_Typecast (Op0             => Size,
-                                            Source_Location => Source_Loc,
+      Append_Argument (Malloc_Args,
+                       Make_Op_Typecast (Op0             => Size,
+                                         Source_Location => Source_Loc,
                     I_Type          => Make_Symbol_Type ("__CPROVER_size_t")));
-      end if;
-
       return Malloc_Call;
    end Make_Malloc_Function_Call_Expr;
 
@@ -1258,6 +1236,36 @@ package body Tree_Walk is
       return Ret;
    end Do_Case_Expression;
 
+   procedure Add_Malloc_Symbol;
+
+   procedure Add_Malloc_Symbol is
+      Malloc_Name : constant String := "malloc";
+      Malloc_Params : constant Irep := New_Irep (I_Parameter_List);
+      Size_Param : constant Irep :=
+        Create_Fun_Parameter (Fun_Name        => Malloc_Name,
+                              Param_Name      => "size",
+                              Param_Type      =>
+                           Make_Symbol_Type (Identifier => "__CPROVER_size_t"),
+                              Param_List      => Malloc_Params,
+                              A_Symbol_Table  => Global_Symbol_Table);
+      Malloc_Type : constant Irep :=
+        Make_Code_Type (Parameters  => Malloc_Params,
+                        Ellipsis    => False,
+                        Return_Type => Make_Pointer_Type (Make_Void_Type),
+                        Inlined     => False,
+                        Knr         => False);
+      Malloc_Symbol : Symbol;
+   begin
+      if Kind (Size_Param) = I_Code_Parameter then
+         Malloc_Symbol :=
+           New_Function_Symbol_Entry (Name           => Malloc_Name,
+                                      Symbol_Type    => Malloc_Type,
+                                      Value          => Ireps.Empty,
+                                      A_Symbol_Table => Global_Symbol_Table);
+         pragma Assert (Kind (Malloc_Symbol.SymType) = I_Code_Type);
+      end if;
+   end Add_Malloc_Symbol;
+
    -------------------------
    -- Do_Compilation_Unit --
    -------------------------
@@ -1268,6 +1276,7 @@ package body Tree_Walk is
       U           : constant Node_Id := Unit (N);
       Unit_Symbol : Symbol;
    begin
+      Add_Malloc_Symbol;
       case Nkind (U) is
          when N_Subprogram_Body =>
             declare
