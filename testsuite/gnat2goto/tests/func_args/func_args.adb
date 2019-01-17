@@ -7,6 +7,6 @@ procedure Func_Args is
    end;
 begin
    C := Assign2 (A + B, B);
-   pragma Assert (C = 7);
+   pragma Assert (C = 5);
    pragma Assert (Assign2 (5, 6) = 12);
 end;
