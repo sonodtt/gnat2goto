@@ -248,6 +248,7 @@ package body Driver is
 
          Global_Symbol_Table.Insert (Start_Name, Start_Symbol);
          Follow_Type_Declarations (Global_Symbol_Table, Followed_Symbol_Table);
+         --  Followed_Symbol_Table.Exclude (Intern ("malloc"));
          Put_Line (Sym_Tab_File,
                    Create (SymbolTable2Json (Followed_Symbol_Table)).Write);
       end if;
@@ -312,6 +313,20 @@ package body Driver is
          Global_Symbol_Table.Insert (Builtin.Name, Builtin);
       end Add_Universal_Integer;
 
+      procedure Add_CProver_Size_T;
+      procedure Add_CProver_Size_T is
+         Builtin   : Symbol;
+         Type_Irep : constant Irep := New_Irep (I_Unsignedbv_Type);
+      begin
+         Set_Width (Type_Irep, 64);
+         Builtin.Name       := Intern ("__CPROVER_size_t");
+         Builtin.PrettyName := Builtin.Name;
+         Builtin.BaseName   := Builtin.Name;
+         Builtin.SymType    := Type_Irep;
+         Builtin.IsType     := True;
+
+         Global_Symbol_Table.Insert (Builtin.Name, Builtin);
+      end Add_CProver_Size_T;
    begin
       --  Add primitive types to the symtab
       for Standard_Type in S_Types'Range loop
@@ -372,6 +387,7 @@ package body Driver is
       end loop;
       Add_Universal_Integer;
       Add_Standard_String;
+      Add_CProver_Size_T;
    end Translate_Standard_Types;
 
    procedure Add_CProver_Internal_Symbols is

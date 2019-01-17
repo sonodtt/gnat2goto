@@ -25,12 +25,13 @@ with Range_Check; use Range_Check;
 
 package body Tree_Walk is
 
-   function Make_Malloc_Function_Call (Size : Irep) return Irep;
+   function Make_Malloc_Function_Call_Expr (Size : Irep) return Irep;
 
    procedure Add_Entity_Substitution (E : Entity_Id; Subst : Irep);
 
    procedure Append_Declare_And_Init
-     (Symbol : Irep; Value : Irep; Block : Irep; Source_Loc : Source_Ptr);
+     (Symbol : Irep; Value : Irep; Block : Irep; Source_Loc : Source_Ptr)
+   with Pre => Kind (Value) in Class_Expr;
 
    procedure Declare_Itype (Ty : Entity_Id);
 
@@ -376,25 +377,45 @@ package body Tree_Walk is
                                         Fun_Name : String;
                                         Message : String) return Irep_Kind;
 
-   function Make_Malloc_Function_Call (Size : Irep) return Irep is
+   function Make_Malloc_Function_Call_Expr (Size : Irep) return Irep is
       Malloc_Args  : constant Irep := New_Irep (I_Argument_List);
+      Malloc_Params : constant Irep := New_Irep (I_Parameter_List);
       Source_Loc : constant Source_Ptr := Get_Source_Location (Size);
+      Malloc_Name : constant String := "malloc";
+      Size_Param : constant Irep :=
+        Create_Fun_Parameter (Fun_Name        => Malloc_Name,
+                              Param_Name      => "size",
+                              Param_Type      =>
+                       Make_Symbol_Type (Identifier => "__CPROVER_size_t"),
+                              Param_List      => Malloc_Params,
+                              A_Symbol_Table  => Global_Symbol_Table,
+                              Source_Location => Source_Loc);
+      Malloc_Type : constant Irep :=
+        Make_Code_Type (Parameters  => Malloc_Params,
+                        Ellipsis    => False,
+                        Return_Type => Make_Pointer_Type (Make_Void_Type),
+                        Inlined     => False,
+                        Knr         => False);
       Sym_Malloc   : constant Irep :=
         Make_Symbol_Expr (Source_Location => Source_Loc,
-                          I_Type          => New_Irep (I_Code_Type),
+                          I_Type          => Malloc_Type,
                           Range_Check     => False,
-                          Identifier      => "malloc");
+                          Identifier      => Malloc_Name);
       Malloc_Call : constant Irep :=
-        Make_Code_Function_Call (Arguments       => Malloc_Args,
-                                 I_Function      => Sym_Malloc,
-                                 Lhs             => Ireps.Empty,
-                                 Source_Location => Source_Loc,
-                                 I_Type          =>
-                                   Make_Pointer_Type (Make_Void_Type));
+        Make_Side_Effect_Expr_Function_Call (Arguments       => Malloc_Args,
+                                             I_Function      => Sym_Malloc,
+                                             Source_Location => Source_Loc,
+                        I_Type          => Make_Pointer_Type (Make_Void_Type));
    begin
-      Append_Argument (Malloc_Args, Size);
+      if Kind (Size_Param) = I_Code_Parameter then
+         Append_Argument (Malloc_Args,
+                          Make_Op_Typecast (Op0             => Size,
+                                            Source_Location => Source_Loc,
+                    I_Type          => Make_Symbol_Type ("__CPROVER_size_t")));
+      end if;
+
       return Malloc_Call;
-   end Make_Malloc_Function_Call;
+   end Make_Malloc_Function_Call_Expr;
 
    procedure Report_Unhandled_Node_Empty (N : Node_Id;
                                           Fun_Name : String;
@@ -440,14 +461,10 @@ package body Tree_Walk is
    begin
       Append_Op (Block, Make_Code_Decl (Symbol => Symbol,
                                         Source_Location => Source_Loc));
-      if Kind (Value) = I_Code_Function_Call then
-         Set_Lhs (Value, Symbol);
-         Append_Op (Block, Value);
-      else
-         Append_Op (Block, Make_Code_Assign (Lhs => Symbol,
-                                             Rhs => Value,
-                                             Source_Location => Source_Loc));
-      end if;
+
+      Append_Op (Block, Make_Code_Assign (Lhs => Symbol,
+                                          Rhs => Value,
+                                          Source_Location => Source_Loc));
    end Append_Declare_And_Init;
 
    -------------------
@@ -4218,7 +4235,7 @@ package body Tree_Walk is
          --  --------------------------------------------------
          --  NB THIS WORKS IN C, NOT IN C++: 'int *a = malloc(sizeof(int));'
          Append_Declare_And_Init (Array_Copy,
-                          Make_Malloc_Function_Call (
+                          Make_Malloc_Function_Call_Expr (
                             Make_Op_Mul (
                               Lhs => Member_Size,
                               Rhs => Param_Symbol (Len_Param),
