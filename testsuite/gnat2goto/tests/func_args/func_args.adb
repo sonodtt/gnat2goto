@@ -6,7 +6,7 @@ procedure Func_Args is
       return D + E;
    end;
 begin
-   C := Assign2 (A, B);
-   pragma Assert (C = 3);
+   C := Assign2 (A + B, B);
+   pragma Assert (C = 7);
    pragma Assert (Assign2 (5, 6) = 12);
 end;
