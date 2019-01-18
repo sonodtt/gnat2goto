@@ -2840,6 +2840,7 @@ package body Tree_Walk is
 
    function Do_Op_Concat (N : Node_Id) return Irep
    is
+      Source_Loc : constant Source_Ptr := Sloc (N);
       LHS_Node : constant Node_Id := Left_Opnd (N);
       RHS_Node : constant Node_Id := Right_Opnd (N);
       LHS : Irep := Do_Expression (LHS_Node);
@@ -2851,9 +2852,9 @@ package body Tree_Walk is
       New_Last :  constant Irep := New_Irep (I_Op_Sub);
       New_Limit : constant Irep := New_Irep (I_Op_Add);
       New_Length : constant Irep := New_Irep (I_Op_Add);
-      New_Data_Expr : constant Irep :=
-        New_Irep (I_Side_Effect_Expr_Cpp_New_Array);
-      New_Data : Irep := New_Data_Expr;
+      New_Data_Expr : Irep := New_Irep (I_Side_Effect_Expr_Function_Call);
+      --  New_Irep (I_Side_Effect_Expr_Cpp_New_Array);
+      New_Data : Irep; --  := New_Data_Expr;
       New_Data_RHS : constant Irep := New_Irep (I_Op_Add);
       Result : constant Irep := New_Irep (I_Struct_Expr);
       Result_Comma_Outer : constant Irep := New_Irep (I_Op_Comma);
@@ -2909,19 +2910,15 @@ package body Tree_Walk is
       end Get_Length;
 
       procedure Make_Binder (Expr : in out Irep; Target : in out Irep) is
-         Fresh : Irep;
-         Let : constant Irep := New_Irep (I_Let_Expr);
+         Fresh : constant Irep :=
+           Fresh_Var_Symbol_Expr (Get_Type (Expr), "op_binder");
+         Let : constant Irep :=
+           Make_Let_Expr (Symbol          => Fresh,
+                          Value           => Expr,
+                          Where           => Ret,
+                          Source_Location => Source_Loc,
+                          I_Type          => Get_Type (Ret));
       begin
-         if not (Kind (Get_Type (Expr)) in Class_Type) then
-            Report_Unhandled_Node_Empty (N, "Do_Op_Concat",
-                                         "Expr type not in class type");
-            return;
-         end if;
-         Fresh := Fresh_Var_Symbol_Expr (Get_Type (Expr), "op_binder");
-         Set_Type (Let, Get_Type (Ret));
-         Set_Symbol (Let, Fresh);
-         Set_Value (Let, Expr);
-         Set_Where (Let, Ret);
          --  Replace expr by the bound variable, and the target
          --  by the new enclosing let-expr.
          Expr := Fresh;
@@ -2961,10 +2958,16 @@ package body Tree_Walk is
                                           Source_Eltype,
                                           New_Index_Type);
                Source_Data : constant Irep := New_Irep (I_Member_Expr);
-               Call : constant Irep :=
-                 New_Irep (I_Side_Effect_Expr_Function_Call);
                Call_Args : constant Irep :=
                  New_Irep (I_Argument_List);
+               Call : constant Irep :=
+                 Make_Side_Effect_Expr_Function_Call (
+                                             Arguments       => Call_Args,
+                                             I_Function      => Callee,
+                                             Source_Location => Source_Loc,
+                                             I_Type => New_Irep (I_Void_Type));
+               --  New_Irep (I_Side_Effect_Expr_Function_Call);
+
             begin
                Set_Subtype (Source_Ptr, Source_Elirep);
                Set_Type (Source_Data, Source_Ptr);
@@ -2974,8 +2977,8 @@ package body Tree_Walk is
                Append_Argument (Call_Args, Target_Ptr);
                Append_Argument (Call_Args, Source_Data);
                Append_Argument (Call_Args, Source_Length);
-               Set_Arguments (Call, Call_Args);
-               Set_Function (Call, Callee);
+               --  Set_Arguments (Call, Call_Args);
+               --  Set_Function (Call, Callee);
 
                return  Call;
             end;
@@ -3005,20 +3008,37 @@ package body Tree_Walk is
 
       --  Introduce a binder for the new allocation so we don't re-evaluate
       --  the alloc when referencing it several times:
-      Set_Type (New_Data_Expr, New_Pointer_Type);
+      --  Set_Type (New_Data_Expr, New_Pointer_Type);
+      --  Get lengths (either from the operands, or 1 if a singleton)
+      LHS_Length := Get_Length (LHS_Node, LHS, Is_Component_Left_Opnd (N));
+      RHS_Length := Get_Length (RHS_Node, RHS, Is_Component_Right_Opnd (N));
+      Set_Lhs (New_Length, LHS_Length);
+      Set_Rhs (New_Length, RHS_Length);
+      Set_Type (New_Length,
+                Do_Type_Reference (Get_Array_Index_Type (LHS_Node)));
+      New_Data_Expr := Make_Malloc_Function_Call_Expr (New_Length);
+      New_Data := New_Data_Expr;
+      if not (Kind (Get_Type (New_Data)) in Class_Type) then
+         return Report_Unhandled_Node_Irep (N, "Do_Op_Concat",
+                                            "New Data type not in class type");
+      end if;
       Make_Binder (New_Data, Ret);
 
       --  Introduce binders for the operands if they are arrays:
+      if not (Kind (Get_Type (LHS)) in Class_Type) then
+         return Report_Unhandled_Node_Irep (N, "Do_Op_Concat",
+                                            "Expr type not in class type");
+      end if;
+      if not (Kind (Get_Type (RHS)) in Class_Type) then
+         return Report_Unhandled_Node_Irep (N, "Do_Op_Concat",
+                                            "Expr type not in class type");
+      end if;
       if not Is_Component_Left_Opnd (N) then
          Make_Binder (LHS, Ret);
       end if;
       if not Is_Component_Right_Opnd (N) then
          Make_Binder (RHS, Ret);
       end if;
-
-      --  Get lengths (either from the operands, or 1 if a singleton)
-      LHS_Length := Get_Length (LHS_Node, LHS, Is_Component_Left_Opnd (N));
-      RHS_Length := Get_Length (RHS_Node, RHS, Is_Component_Right_Opnd (N));
 
       --  New array lower bound is given by rules:
       --  If the result is a constrained array, that array's lower bound
@@ -3055,9 +3075,6 @@ package body Tree_Walk is
 
       --  New upper bound is simply new lower bound + lengths (less one,
       --  because Ada bounds are inclusive)
-      Set_Lhs (New_Length, LHS_Length);
-      Set_Rhs (New_Length, RHS_Length);
-      Set_Type (New_Length, Get_Type (New_First));
 
       Set_Lhs (New_Limit, New_First);
       Set_Rhs (New_Limit, New_Length);
@@ -3069,7 +3086,8 @@ package body Tree_Walk is
 
       --  Build the data array:
       Set_Subtype (New_Pointer_Type, Do_Type_Reference (New_Component_Type));
-      Set_Size (New_Data_Expr, New_Length);
+      --  Set_Size (New_Data_Expr, New_Length);
+
       LHS_Copy :=
         Make_Copy (New_Data,
                    LHS_Node,
