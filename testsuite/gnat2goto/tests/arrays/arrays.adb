@@ -1,7 +1,8 @@
 procedure Arrays is
-   type Arr7 is array (1 .. 3) of Integer;
-   Actual7 : Arr7 := (1,2,3);
+   subtype Range1 is Integer range 10 .. 20;
+   type Arr3 is array (Range1) of Integer;
+   Actual3 : Arr3 := (7, 8, 9, others => 10);
 begin
-   Actual7(1) := 2;
---   pragma Assert(Actual7(1) =2);
+   Actual3 (13 .. 16) := Actual3 (11 .. 12) & Actual3 (15 .. 16);
+   pragma Assert (Actual3(13) = 11);
 end Arrays;
