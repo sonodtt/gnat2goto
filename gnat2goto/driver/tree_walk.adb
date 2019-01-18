@@ -2933,16 +2933,22 @@ package body Tree_Walk is
       begin
          if Is_Singleton then
             declare
-               Deref : constant Irep := New_Irep (I_Dereference_Expr);
-               Assign : constant Irep := New_Irep (I_Side_Effect_Expr_Assign);
+               Target_Subtype : constant Irep :=
+                 Get_Subtype (Get_Type (Target_Ptr));
+               Deref : constant Irep :=
+                 Make_Dereference_Expr (Object          => Target_Ptr,
+                                        Source_Location => Source_Loc,
+                                        I_Type          => Target_Subtype);
+               Assign : constant Irep :=
+                 Make_Side_Effect_Expr_Assign (Rhs             =>
+                                              Maybe_Make_Typecast (Source_Irep,
+                                                   Etype (Source_Node),
+                                                   New_Component_Type),
+                                               Lhs             => Deref,
+                                               Source_Location => Source_Loc,
+                                            I_Type          => Target_Subtype);
             begin
                --  Simply assign *target = source
-               Set_Object (Deref, Target_Ptr);
-               Set_Type (Deref, Get_Subtype (Get_Type (Target_Ptr)));
-               Set_Lhs (Assign, Deref);
-               Set_Rhs (Assign, Maybe_Make_Typecast (Source_Irep,
-                                                     Etype (Source_Node),
-                                                     New_Component_Type));
                return Assign;
             end;
          else
@@ -2952,12 +2958,19 @@ package body Tree_Walk is
                  Get_Array_Component_Type (Source_Node);
                Source_Elirep : constant Irep :=
                  Do_Type_Reference (Source_Eltype);
-               Source_Ptr : constant Irep := New_Irep (I_Pointer_Type);
+               Source_Ptr : constant Irep :=
+                 Make_Pointer_Type (I_Subtype => Source_Elirep,
+                                    Width     => 32); --  TODO
                Callee : constant Irep :=
                  Get_Array_Copy_Function (New_Component_Type,
                                           Source_Eltype,
                                           New_Index_Type);
-               Source_Data : constant Irep := New_Irep (I_Member_Expr);
+               Source_Data : constant Irep :=
+                 Make_Member_Expr (Compound         => Source_Irep,
+                                   Source_Location  => Source_Loc,
+                                   Component_Number => 0, --  TODO
+                                   I_Type           => Source_Ptr,
+                                   Component_Name   => "data");
                Call_Args : constant Irep :=
                  New_Irep (I_Argument_List);
                Call : constant Irep :=
@@ -2966,19 +2979,10 @@ package body Tree_Walk is
                                              I_Function      => Callee,
                                              Source_Location => Source_Loc,
                                              I_Type => New_Irep (I_Void_Type));
-               --  New_Irep (I_Side_Effect_Expr_Function_Call);
-
             begin
-               Set_Subtype (Source_Ptr, Source_Elirep);
-               Set_Type (Source_Data, Source_Ptr);
-               Set_Compound (Source_Data, Source_Irep);
-               Set_Component_Name (Source_Data, "data");
-
                Append_Argument (Call_Args, Target_Ptr);
                Append_Argument (Call_Args, Source_Data);
                Append_Argument (Call_Args, Source_Length);
-               --  Set_Arguments (Call, Call_Args);
-               --  Set_Function (Call, Callee);
 
                return  Call;
             end;
@@ -3040,6 +3044,13 @@ package body Tree_Walk is
          Make_Binder (RHS, Ret);
       end if;
 
+      if not (Nkind (LHS_Node) in N_Has_Etype) or else
+        not (Nkind (First_Index (Etype (LHS_Node))) in N_Has_Etype)
+      then
+         Report_Unhandled_Node_Empty (N, "Do_Op_Concat",
+                                      "Lhs not have etype");
+         return Ret;
+      end if;
       --  New array lower bound is given by rules:
       --  If the result is a constrained array, that array's lower bound
       --  otherwise if the LHS is a singleton, the result index type's least
@@ -3053,24 +3064,16 @@ package body Tree_Walk is
                                Etype (
                                   First_Index (Ultimate_Ancestor)))));
       else
-         New_First := New_Irep (I_Member_Expr);
-         Set_Compound (New_First, LHS);
-         Set_Component_Name (New_First, "first1");
-         declare
-            LHS_Idx_Type : Entity_Id;
-         begin
-            if not (Nkind (LHS_Node) in N_Has_Etype) or else
-              not (Nkind (First_Index (Etype (LHS_Node))) in N_Has_Etype)
-            then
-               Report_Unhandled_Node_Empty (N, "Do_Op_Concat",
-                                            "Lhs not have etype");
-               return Ret;
-            end if;
-            LHS_Idx_Type := Get_Array_Index_Type (LHS_Node);
-            Set_Type (New_First, Do_Type_Reference (LHS_Idx_Type));
-            New_First :=
-              Maybe_Make_Typecast (New_First, LHS_Idx_Type, New_Index_Type);
-         end;
+         New_First :=
+           Make_Member_Expr (Compound         => LHS,
+                             Source_Location  => Source_Loc,
+                             Component_Number => 0, --  TODO
+                             I_Type           =>
+                           Do_Type_Reference (Get_Array_Index_Type (LHS_Node)),
+                             Component_Name   => "first1");
+         New_First :=
+              Maybe_Make_Typecast (New_First, Get_Array_Index_Type (LHS_Node),
+                                   New_Index_Type);
       end if;
 
       --  New upper bound is simply new lower bound + lengths (less one,
@@ -3086,7 +3089,6 @@ package body Tree_Walk is
 
       --  Build the data array:
       Set_Subtype (New_Pointer_Type, Do_Type_Reference (New_Component_Type));
-      --  Set_Size (New_Data_Expr, New_Length);
 
       LHS_Copy :=
         Make_Copy (New_Data,
