@@ -4235,10 +4235,13 @@ package body Tree_Walk is
                              Source_Location => Source_Loc);
 
          --  NEW VARS FOR MALLOC ALLOCATION
-         Type_Width : constant Integer :=
-           Positive (UI_To_Int (Esize (Element_Type)));
          Member_Size : constant Irep :=
-           (Make_Integer_Constant (Type_Width, Index_Type));
+           Make_Constant_Expr (Source_Location => Source_Loc,
+                               I_Type          => Len_Type,
+                               Range_Check     => False,
+                               Value           =>
+                    Convert_Uint_To_Hex (Value     => Esize (Element_Type) / 8,
+                                         Bit_Width => 32));
       begin
          --  Create body (allocate and then call array_copy)
          --  --------------------------------------------------
@@ -4248,7 +4251,7 @@ package body Tree_Walk is
                             Make_Op_Mul (
                               Lhs => Member_Size,
                               Rhs => Param_Symbol (Len_Param),
-                              I_Type => Make_Integer_Type,
+                              I_Type => Len_Type,
                               Source_Location => Source_Loc)),
                                   Body_Block, 0);
          --  --------------------------------------------------
