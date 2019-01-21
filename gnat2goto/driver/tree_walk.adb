@@ -628,6 +628,7 @@ package body Tree_Walk is
          Call_Expr : constant Irep :=
            Make_Side_Effect_Expr_Function_Call (I_Function => Dup,
                                                 Arguments => Call_Args,
+                                    I_Type => Make_Pointer_Type (Element_Type),
                                                 Source_Location => Sloc (N));
       begin
          Append_Argument (Call_Args, Typecast_Expr);
@@ -3088,6 +3089,8 @@ package body Tree_Walk is
       Set_Type (New_Last, Get_Type (New_First));
 
       --  Build the data array:
+      Set_Width (I     => New_Pointer_Type,
+                 Value => Pointer_Type_Width);
       Set_Subtype (New_Pointer_Type, Do_Type_Reference (New_Component_Type));
 
       LHS_Copy :=
@@ -3645,6 +3648,8 @@ package body Tree_Walk is
       Result : constant Irep := New_Irep (I_Struct_Expr);
    begin
       Set_Subtype (Pointer_Type, Do_Type_Reference (Element_Type));
+      Set_Width (I     => Pointer_Type,
+                 Value => Pointer_Type_Width);
 
       --  Adjust data pointer:
       Set_Lhs (Offset, New_First_Expr);
@@ -4004,6 +4009,7 @@ package body Tree_Walk is
       end loop;
 
       Set_Subtype (Data_Type, Sub);
+      Set_Width (Data_Type, Pointer_Type_Width);
       Append_Component (Ret_Components, Data_Member);
 
       Set_Components (Ret, Ret_Components);
@@ -4416,6 +4422,8 @@ package body Tree_Walk is
       end if;
       Idx_Type := Etype (First_Index (Base_Type));
       Set_Component_Name (First, "first1");
+      Set_Component_Number (I     => First,
+                            Value => 0);
       Set_Compound (First, Base_Irep);
       Set_Type (First, Do_Type_Reference (Idx_Type));
       return First;
@@ -4456,9 +4464,12 @@ package body Tree_Walk is
       Set_Component_Name (Data, "data");
       Set_Compound (Data, Base_Irep);
       Set_Subtype (Pointer_Type, Result_Type);
+      Set_Width (Pointer_Type, Pointer_Type_Width);
       Set_Type (Data, Pointer_Type);
+      Set_Component_Number (I     => Data,
+                            Value => 2);
       Set_Lhs (Offset, Data);
-      Set_Rhs (Offset, Idx_Irep);
+      Set_Rhs (Offset, Zero_Based_Index);
       Set_Type (Offset, Pointer_Type);
       Set_Object (Deref, Offset);
       Set_Type (Deref, Result_Type);
@@ -4478,9 +4489,11 @@ package body Tree_Walk is
    begin
       Set_Compound (First_Expr, Array_Struct);
       Set_Component_Name (First_Expr, "first1");
+      Set_Component_Number (First_Expr, 0);
       Set_Type (First_Expr, Index_Type_Irep);
       Set_Compound (Last_Expr, Array_Struct);
       Set_Component_Name (Last_Expr, "last1");
+      Set_Component_Number (Last_Expr, 1);
       Set_Type (Last_Expr, Index_Type_Irep);
       return Make_Array_Length_Expr (First_Expr, Last_Expr, Index_Type);
    end Make_Array_Length_Expr;
