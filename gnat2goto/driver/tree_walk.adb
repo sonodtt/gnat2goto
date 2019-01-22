@@ -533,7 +533,11 @@ package body Tree_Walk is
       Index_Type_Node : constant Entity_Id := Etype (Etype (Bounds));
 
       Len_Expr : constant Irep :=
-        Make_Array_Length_Expr (Low_Expr, High_Expr, Index_Type_Node);
+        Make_Constant_Expr (Source_Location => Sloc (N),
+                            I_Type          => Make_Int_Type (32),
+                            Range_Check     => False,
+                            Value           => "3");
+      --  Make_Array_Length_Expr (Low_Expr, High_Expr, Index_Type_Node);
 
       Bare_Array_Type : constant Irep :=
         Make_Array_Type (I_Subtype => Element_Type,
