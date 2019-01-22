@@ -4269,6 +4269,13 @@ package body Tree_Walk is
                     Convert_Uint_To_Hex (Value     => Esize (Element_Type) / 8,
                                          Bit_Width => 32));
       begin
+         --  Set_Return_Type (I     => New_Irep (I_Code_Type),
+         --                    --  Value => New_Irep (I_Void_Type));
+         --                    Value =>  Ptr_Type);
+
+         Set_Type (I     => Return_Inst,
+                   Value => Ptr_Type);
+
          --  Create body (allocate and then call array_copy)
          --  --------------------------------------------------
          --  NB THIS WORKS IN C, NOT IN C++: 'int *a = malloc(sizeof(int));'
