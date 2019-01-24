@@ -4447,14 +4447,31 @@ package body Tree_Walk is
    function Make_Array_Index_Op
      (Base_Irep : Irep; Base_Type : Node_Id; Idx_Irep : Irep) return Irep
    is
+      Source_Loc : constant Source_Ptr := Sloc (Base_Type);
       First_Irep : constant Irep :=
         Make_Array_First_Expr (Base_Type, Base_Irep);
-      Zero_Based_Index : constant Irep := New_Irep (I_Op_Sub);
+      Zero_Based_Index : constant Irep :=
+        Make_Op_Sub (Rhs             => First_Irep,
+                     Lhs             => Idx_Irep,
+                     Source_Location => Source_Loc,
+                     Overflow_Check  => False,
+                     I_Type          => Get_Type (Idx_Irep),
+                     Range_Check     => False);
       Result_Type : Irep;
-      Data : constant Irep := New_Irep (I_Member_Expr);
-      Offset : constant Irep := New_Irep (I_Op_Add);
-      Deref : constant Irep := New_Irep (I_Dereference_Expr);
       Pointer_Type : constant Irep := New_Irep (I_Pointer_Type);
+      Data : constant Irep :=
+        Make_Member_Expr (Compound         => Base_Irep,
+                          Source_Location  => Source_Loc,
+                          Component_Number => 3,
+                          I_Type           => Pointer_Type,
+                          Component_Name   => "data");
+      Offset : constant Irep :=
+        Make_Op_Add (Rhs             => Zero_Based_Index,
+                     Lhs             => Data,
+                     Source_Location => Source_Loc,
+                     Overflow_Check  => False,
+                     I_Type          => Pointer_Type);
+      Deref : Irep := New_Irep (I_Dereference_Expr);
    begin
       if not Is_Array_Type (Base_Type) then
          Report_Unhandled_Node_Empty (Base_Type, "Make_Array_Index_Op",
@@ -4462,8 +4479,6 @@ package body Tree_Walk is
          return Deref;
       end if;
       Result_Type := Do_Type_Reference (Component_Type (Base_Type));
-      Set_Lhs (Zero_Based_Index, Idx_Irep);
-      Set_Rhs (Zero_Based_Index, First_Irep);
       if not (Kind (Zero_Based_Index) in Class_Expr) or else
         not (Kind (Get_Type (Idx_Irep)) in Class_Type)
       then
@@ -4471,19 +4486,13 @@ package body Tree_Walk is
                                       "Kinds not in classes");
          return Deref;
       end if;
-      Set_Type (Zero_Based_Index, Get_Type (Idx_Irep));
-      Set_Component_Name (Data, "data");
-      Set_Compound (Data, Base_Irep);
-      Set_Subtype (Pointer_Type, Result_Type);
-      Set_Width (Pointer_Type, Pointer_Type_Width);
-      Set_Type (Data, Pointer_Type);
-      Set_Component_Number (I     => Data,
-                            Value => 2);
-      Set_Lhs (Offset, Data);
-      Set_Rhs (Offset, Zero_Based_Index);
-      Set_Type (Offset, Pointer_Type);
-      Set_Object (Deref, Offset);
-      Set_Type (Deref, Result_Type);
+      Set_Subtype (I     => Pointer_Type,
+                Value => Result_Type);
+      Set_Width (I     => Pointer_Type,
+                 Value => Pointer_Type_Width);
+      Deref := Make_Dereference_Expr (Object          => Offset,
+                                      Source_Location => Source_Loc,
+                                      I_Type          => Result_Type);
       return Deref;
    end Make_Array_Index_Op;
 
