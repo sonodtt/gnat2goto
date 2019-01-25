@@ -26,6 +26,9 @@ with Range_Check; use Range_Check;
 package body Tree_Walk is
 
    function Make_Malloc_Function_Call_Expr (Size : Irep) return Irep;
+   function Make_Memcpy_Function_Call_Expr (Destination : Irep;
+                                            Source : Irep;
+                                            Num : Irep) return Irep;
 
    procedure Add_Entity_Substitution (E : Entity_Id; Subst : Irep);
 
@@ -394,6 +397,30 @@ package body Tree_Walk is
                     I_Type          => Make_Symbol_Type ("__CPROVER_size_t")));
       return Malloc_Call;
    end Make_Malloc_Function_Call_Expr;
+
+   function Make_Memcpy_Function_Call_Expr (Destination : Irep;
+                                            Source : Irep;
+                                            Num : Irep) return Irep is
+      Memcpy_Args  : constant Irep := New_Irep (I_Argument_List);
+      Source_Loc : constant Source_Ptr := Get_Source_Location (Source);
+      Memcpy_Name : constant String := "memcpy";
+      Memcpy_Call : constant Irep :=
+        Make_Side_Effect_Expr_Function_Call (Arguments       => Memcpy_Args,
+                                             I_Function      => Symbol_Expr (
+                                   Global_Symbol_Table (Intern (Memcpy_Name))),
+                                             Source_Location => Source_Loc,
+                        I_Type          => Make_Pointer_Type (Make_Void_Type));
+   begin
+      Append_Argument (I     => Memcpy_Args,
+                       Value => Destination);
+      Append_Argument (I     => Memcpy_Args,
+                       Value => Source);
+      Append_Argument (Memcpy_Args,
+                       Make_Op_Typecast (Op0             => Num,
+                                         Source_Location => Source_Loc,
+                    I_Type          => Make_Symbol_Type ("__CPROVER_size_t")));
+      return Memcpy_Call;
+   end Make_Memcpy_Function_Call_Expr;
 
    procedure Report_Unhandled_Node_Empty (N : Node_Id;
                                           Fun_Name : String;
@@ -1271,6 +1298,53 @@ package body Tree_Walk is
       end if;
    end Add_Malloc_Symbol;
 
+   procedure Add_Memcpy_Symbol;
+
+   procedure Add_Memcpy_Symbol is
+      Memcpy_Name : constant String := "memcpy";
+      Memcpy_Params : constant Irep := New_Irep (I_Parameter_List);
+      Destination_Param : constant Irep :=
+        Create_Fun_Parameter (Fun_Name        => Memcpy_Name,
+                              Param_Name      => "destination",
+                              Param_Type      =>
+                                Make_Pointer_Type (Make_Void_Type),
+                              Param_List      => Memcpy_Params,
+                              A_Symbol_Table  => Global_Symbol_Table);
+      Source_Param : constant Irep :=
+        Create_Fun_Parameter (Fun_Name        => Memcpy_Name,
+                              Param_Name      => "source",
+                              Param_Type      =>
+                                Make_Pointer_Type (Make_Void_Type),
+                              Param_List      => Memcpy_Params,
+                              A_Symbol_Table  => Global_Symbol_Table);
+      Num_Param : constant Irep :=
+        Create_Fun_Parameter (Fun_Name        => Memcpy_Name,
+                              Param_Name      => "num",
+                              Param_Type      =>
+                           Make_Symbol_Type (Identifier => "__CPROVER_size_t"),
+                              Param_List      => Memcpy_Params,
+                              A_Symbol_Table  => Global_Symbol_Table);
+      Memcpy_Type : constant Irep :=
+        Make_Code_Type (Parameters  => Memcpy_Params,
+                        Ellipsis    => False,
+                        Return_Type => Make_Pointer_Type (Make_Void_Type),
+                        Inlined     => False,
+                        Knr         => False);
+      Memcpy_Symbol : Symbol;
+   begin
+      if Kind (Destination_Param) = I_Code_Parameter and then
+        Kind (Source_Param) = I_Code_Parameter and then
+        Kind (Num_Param) = I_Code_Parameter
+      then
+         Memcpy_Symbol :=
+           New_Function_Symbol_Entry (Name           => Memcpy_Name,
+                                      Symbol_Type    => Memcpy_Type,
+                                      Value          => Ireps.Empty,
+                                      A_Symbol_Table => Global_Symbol_Table);
+         pragma Assert (Kind (Memcpy_Symbol.SymType) = I_Code_Type);
+      end if;
+   end Add_Memcpy_Symbol;
+
    -------------------------
    -- Do_Compilation_Unit --
    -------------------------
@@ -1282,6 +1356,7 @@ package body Tree_Walk is
       Unit_Symbol : Symbol;
    begin
       Add_Malloc_Symbol;
+      Add_Memcpy_Symbol;
       case Nkind (U) is
          when N_Subprogram_Body =>
             declare
@@ -2579,7 +2654,9 @@ package body Tree_Walk is
       function Needs_Default_Initialisation (E : Entity_Id) return Boolean is
       begin
          return Has_Defaulted_Discriminants (E)
-           or else Has_Defaulted_Components (E);
+           or else Has_Defaulted_Components (E)
+           or else True;
+           -- or else Ekind (E) = E_Array_Subtype;
       end Needs_Default_Initialisation;
 
       function Disc_Expr (N : Node_Id) return Node_Id is
@@ -2592,19 +2669,32 @@ package body Tree_Walk is
          Lbound : constant Irep := Do_Expression (Low_Bound (Idx));
          Hbound : constant Irep := Do_Expression (High_Bound (Idx));
          Idx_Type : constant Entity_Id := Get_Array_Index_Type (E);
-         Len : constant Irep :=
-           Make_Array_Length_Expr (Lbound, Hbound, Idx_Type);
+         Source_Loc : constant Source_Ptr := Sloc (E);
          Component_Type : constant Irep :=
            Do_Type_Reference (Get_Array_Component_Type (E));
+         Len : constant Irep :=
+           Make_Array_Length_Expr (Lbound, Hbound, Idx_Type);
+
          Alloc : constant Irep :=
-           Make_Side_Effect_Expr_Cpp_New_Array
-           (Size => Len, I_Type => Make_Pointer_Type (Component_Type),
-            Source_Location => Sloc (E));
+           Make_Malloc_Function_Call_Expr (Size =>
+             Compute_Malloc_Size (Num_Elem          => Len,
+                     Element_Type_Size => Esize (Get_Array_Component_Type (E)),
+                     Index_Type        => Do_Type_Reference (Idx_Type),
+                     Source_Loc        => Source_Loc)
+                                          );
+--             Make_Side_Effect_Expr_Cpp_New_Array
+--             (Size => Len, I_Type => Make_Pointer_Type (Component_Type),
+--              Source_Location => Sloc (E));
          Ret : constant Irep := New_Irep (I_Struct_Expr);
       begin
          Append_Struct_Member (Ret, Lbound);
          Append_Struct_Member (Ret, Hbound);
-         Append_Struct_Member (Ret, Alloc);
+         Append_Struct_Member (Ret,
+                               Make_Op_Typecast (Op0             => Alloc,
+                                                 Source_Location => Sloc (E),
+                       I_Type          =>
+                         Make_Pointer_Type (I_Subtype => Component_Type,
+                                            Width     => Pointer_Type_Width)));
          Set_Type (Ret, Do_Type_Reference (E));
          return Ret;
       end Make_Array_Default_Initialiser;
@@ -2966,29 +3056,17 @@ package body Tree_Walk is
                Source_Ptr : constant Irep :=
                  Make_Pointer_Type (I_Subtype => Source_Elirep,
                                     Width     => 32); --  TODO
-               Callee : constant Irep :=
-                 Get_Array_Copy_Function (New_Component_Type,
-                                          Source_Eltype,
-                                          New_Index_Type);
                Source_Data : constant Irep :=
                  Make_Member_Expr (Compound         => Source_Irep,
                                    Source_Location  => Source_Loc,
                                    Component_Number => 0, --  TODO
                                    I_Type           => Source_Ptr,
                                    Component_Name   => "data");
-               Call_Args : constant Irep :=
-                 New_Irep (I_Argument_List);
                Call : constant Irep :=
-                 Make_Side_Effect_Expr_Function_Call (
-                                             Arguments       => Call_Args,
-                                             I_Function      => Callee,
-                                             Source_Location => Source_Loc,
-                                             I_Type => New_Irep (I_Void_Type));
+                 Make_Memcpy_Function_Call_Expr (Destination => Target_Ptr,
+                                                 Source      => Source_Data,
+                                                 Num         => Source_Length);
             begin
-               Append_Argument (Call_Args, Target_Ptr);
-               Append_Argument (Call_Args, Source_Data);
-               Append_Argument (Call_Args, Source_Length);
-
                return  Call;
             end;
          end if;
@@ -4246,20 +4324,15 @@ package body Tree_Walk is
          Array_Copy : constant Irep :=
            Fresh_Var_Symbol_Expr (Ptr_Type, "new_array");
          Body_Block : constant Irep := Make_Code_Block (Source_Loc);
-         Call_Args : constant Irep := New_Irep (I_Argument_List);
          Lhs_fun_call : constant Irep :=
            Fresh_Var_Symbol_Expr (Do_Type_Reference (Element_Type),
                                   "array_dup_fun_lhs");
-         Call_Inst : constant Irep :=
-           Make_Code_Function_Call (Arguments       => Call_Args,
-                                    --  the argument are appended later
-                                    I_Function      =>
-                                      Get_Array_Copy_Function (
-                                        Element_Type,
-                                        Element_Type,
-                                        Index_Type),
-                                    Lhs             => Lhs_fun_call,
-                                    Source_Location => Source_Loc);
+         Call_Expr_Inst : constant Irep :=
+           Make_Memcpy_Function_Call_Expr (Destination => Array_Copy,
+                                           Source      =>
+                                             Param_Symbol (Ptr_Param),
+                                           Num         =>
+                                             Param_Symbol (Len_Param));
          Return_Inst : constant Irep :=
            Make_Code_Return (Return_Value    => Array_Copy,
                              Source_Location => Source_Loc);
@@ -4306,10 +4379,11 @@ package body Tree_Walk is
          --      Source_Location => Sloc ((Element_Type))),
          --    Body_Block, 0);
          --  --------------------------------------------------
-         Append_Argument (Call_Args, Array_Copy);
-         Append_Argument (Call_Args, Param_Symbol (Ptr_Param));
-         Append_Argument (Call_Args, Param_Symbol (Len_Param));
-         Append_Op (Body_Block, Call_Inst);
+         Append_Op (Body_Block,
+                    Make_Code_Assign (Rhs             => Call_Expr_Inst,
+                                      Lhs             => Lhs_fun_call,
+                                      Source_Location => Source_Loc,
+                                      I_Type          => Make_Void_Type));
          Append_Op (Body_Block, Return_Inst);
 
          Func_Symbol :=

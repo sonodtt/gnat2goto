@@ -3,6 +3,7 @@ with Types;             use Types;
 with Atree;             use Atree;
 with Sinfo;             use Sinfo;
 with Symbol_Table_Info; use Symbol_Table_Info;
+with Uintp;                 use Uintp;
 
 package GOTO_Utils is
 
@@ -47,6 +48,11 @@ package GOTO_Utils is
      with Pre => (Kind (Param_Type) in Class_Type
                   and then Kind (Param_List) = I_Parameter_List),
      Post => Kind (Create_Fun_Parameter'Result) = I_Code_Parameter;
+
+   function Compute_Malloc_Size (Num_Elem : Irep; Element_Type_Size : Uint;
+                                 Index_Type : Irep;
+                                 Source_Loc : Source_Ptr := No_Location)
+                                 return Irep;
 
    function Name_Has_Prefix (N : Node_Id; Prefix : String) return Boolean;
 
