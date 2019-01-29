@@ -8,6 +8,14 @@ with Ireps;                 use Ireps;
 
 package Tree_Walk is
 
+   -- global variables used for storing ireps for debugging
+   -- lengthy names to indicate 'origin' :)
+   Global_Irep_Array_Op_Zero_Index : Irep;
+   Global_Irep_Array_Op_Deref : Irep;
+   Global_Irep_Do_Aggregate_Literal_Array_Array_expr : Irep;
+   Global_Irep_Dup_Array_Ptr_Param : Irep;
+
+
    Global_Symbol_Table : Symbol_Table;
    Anonymous_Type_Counter : Positive := 1;
 

@@ -577,6 +577,8 @@ package body Tree_Walk is
         Make_Op_Typecast (Op0 => Make_Address_Of (Literal_Temp),
                           I_Type => Make_Pointer_Type (Element_Type),
                           Source_Location => Sloc (N));
+      --  added this irep to assist with debugging (have an irep not just a return)
+      let_expr_irep : Irep;
    begin
       --  Handle an "others" splat expression if present:
       if Present (Component_Associations (N)) then
@@ -667,11 +669,16 @@ package body Tree_Walk is
          Append_Struct_Member (Result_Struct, Call_Expr);
       end;
 
-      return Make_Let_Expr (Symbol => Literal_Temp,
+      -- debug this irep
+      Global_Irep_Do_Aggregate_Literal_Array_Array_expr := Array_Expr;
+
+      let_expr_irep := Make_Let_Expr (Symbol => Literal_Temp,
                             Value => Array_Expr,
                             Where => Result_Struct,
                             I_Type => Result_Type,
                             Source_Location => Sloc (N));
+
+      return let_expr_irep;
    end Do_Aggregate_Literal_Array;
 
    ---------------------------------
@@ -4324,8 +4331,11 @@ package body Tree_Walk is
          Array_Copy : constant Irep :=
            Fresh_Var_Symbol_Expr (Ptr_Type, "new_array");
          Body_Block : constant Irep := Make_Code_Block (Source_Loc);
+--           Lhs_fun_call : constant Irep :=
+--             Fresh_Var_Symbol_Expr (Do_Type_Reference (Element_Type),
+--                                    "array_dup_fun_lhs");
          Lhs_fun_call : constant Irep :=
-           Fresh_Var_Symbol_Expr (Do_Type_Reference (Element_Type),
+           Fresh_Var_Symbol_Expr (Ptr_Type,
                                   "array_dup_fun_lhs");
          Call_Expr_Inst : constant Irep :=
            Make_Memcpy_Function_Call_Expr (Destination => Array_Copy,
@@ -4346,6 +4356,7 @@ package body Tree_Walk is
                     Convert_Uint_To_Hex (Value     => Esize (Element_Type) / 8,
                                          Bit_Width => 32));
       begin
+         Global_Irep_Dup_Array_Ptr_Param := Ptr_Param;
          --  Set_Return_Type (I     => New_Irep (I_Code_Type),
          --                    --  Value => New_Irep (I_Void_Type));
          --                    Value =>  Ptr_Type);
@@ -4547,6 +4558,7 @@ package body Tree_Walk is
                      I_Type          => Pointer_Type);
       Deref : Irep := New_Irep (I_Dereference_Expr);
    begin
+
       if not Is_Array_Type (Base_Type) then
          Report_Unhandled_Node_Empty (Base_Type, "Make_Array_Index_Op",
                                       "Base type not array type");
@@ -4567,6 +4579,10 @@ package body Tree_Walk is
       Deref := Make_Dereference_Expr (Object          => Offset,
                                       Source_Location => Source_Loc,
                                       I_Type          => Result_Type);
+
+      global_Irep_array_op_zero_index := Zero_Based_Index;
+      global_Irep_array_op_Deref := Deref;
+
       return Deref;
    end Make_Array_Index_Op;
 

@@ -10,7 +10,8 @@ project GNAT2GOTO is
 
    for Main use ("gnat1drv.adb");
 
-   Common_Switches := ("-gnatg", "-g", "-gnateE");
+   --  Common_Switches := ("-gnatg", "-g", "-gnateE");
+   Common_Switches := ("-g", "-gnateE");
 
    package Compiler is
       --  for Local_Configuration_Pragmas use "gnat.adc";

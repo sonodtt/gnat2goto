@@ -46,6 +46,8 @@ with GNAT_Utils;            use GNAT_Utils;
 
 with GNAT2GOTO.Options;
 
+with Minimal_01; use Minimal_01;
+
 package body Driver is
 
    procedure Translate_Standard_Types;
@@ -247,6 +249,10 @@ package body Driver is
          Start_Symbol.Mode    := Intern ("C");
 
          Global_Symbol_Table.Insert (Start_Name, Start_Symbol);
+
+         --  last location you can insert a manual sym table insertion file
+         Test01;
+
          Follow_Type_Declarations (Global_Symbol_Table, Followed_Symbol_Table);
          --  Followed_Symbol_Table.Exclude (Intern ("malloc"));
          Put_Line (Sym_Tab_File,
